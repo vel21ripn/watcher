@@ -1,0 +1,6 @@
+
+*.o
+reader
+watcher
+yaml-parser
+/test

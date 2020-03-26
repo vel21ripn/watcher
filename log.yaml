@@ -1,0 +1,14 @@
+---
+default:
+       line: 1
+       word: 1
+       interval: 5
+       number: 5
+       delta: 0
+source:
+   cputerm:
+       file: /sys/class/hwmon/hwmon1/temp1_input
+       interval: 3
+   fan1:
+       file: /sys/class/hwmon/hwmon3/fan2_input
+       interval: 4
