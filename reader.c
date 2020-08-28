@@ -178,14 +178,15 @@ float v;
 	if(rr->delta) {
 		float t = rr->values_count ? v - rr->value_delta : 0;
 		rr->value_delta = v;
-		v = t;
+		v = t/rr->p_int;
 	}
-	fprintf(stderr,"value %s %g OK\n",rr->name,v);
+//	fprintf(stderr,"value %s %g OK\n",rr->name,v);
 	rr->value_last = v;
 	if(rr->values_count < rr->numbers) {
 		if(rr->values_count) rr->value_index++;
 		rr->values[rr->value_index] = v;
-		if(rr->values_count) {
+		if( (rr->values_count && !rr->delta) || 
+		    (rr->values_count > 1 && rr->delta) ) {
 			if(v < rr->value_min) rr->value_min = v;
 			if(v > rr->value_max) rr->value_max = v;
 		} else {
@@ -194,6 +195,7 @@ float v;
 		}
 		rr->values_count++;
 		rr->value_sum += v;
+//	fprintf(stderr,"value0 %s %g min:%g max:%g\n",rr->name,v,rr->value_min,rr->value_max);
 		return 0;
 	}
 	next = (rr->value_index + 1) % rr->numbers;
@@ -207,6 +209,7 @@ float v;
 		if(rr->values[i] < rr->value_min) rr->value_min = rr->values[i];
 		if(rr->values[i] > rr->value_max) rr->value_max = rr->values[i];
 	}
+//	fprintf(stderr,"value1 %s %g min:%g max:%g\n",rr->name,v,rr->value_min,rr->value_max);
 	return 0;
 }
 

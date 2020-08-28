@@ -7,11 +7,12 @@ default:
        delta: 0
 source:
    cputerm:
-       file: /sys/class/hwmon/hwmon1/temp1_input
-       interval: 3
-#   fan1:
-#      file: /sys/class/hwmon/hwmon3/fan2_input
-#      interval: 4
+       file: /sys/class/hwmon/hwmon0/temp1_input
+   softirq:
+       file: /proc/stat
+       delta: 1
+       filter: "^cpu"
+       word: 8
    softirq0:
        file: /proc/stat
        delta: 1
@@ -36,20 +37,5 @@ source:
        file: /proc/stat
        delta: 1
        filter: "^cpu4"
-       word: 8
-   softirq5:
-       file: /proc/stat
-       delta: 1
-       filter: "^cpu5"
-       word: 8
-   softirq6:
-       file: /proc/stat
-       delta: 1
-       filter: "^cpu6"
-       word: 8
-   softirq7:
-       file: /proc/stat
-       delta: 1
-       filter: "^cpu7"
        word: 8
 
