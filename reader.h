@@ -28,4 +28,4 @@ void delete_reader(struct reader_helper *);
 
 extern struct reader_helper *RD[READER_CFG_MAX];
 extern int RD_count;
-
+extern char *PidFile;

@@ -62,6 +62,49 @@ static const struct fuse_opt option_spec[] = {
 	FUSE_OPT_END
 };
 
+/*
+ * pidfile
+ */
+// create_pidfile,is_valid_pidfile  {{{{
+static int create_pidfile(char *pfile) {
+int fd,pid_file_ok;
+ssize_t n;
+char buf[64];
+fd = creat(pfile,0644);
+if(fd < 0) return 1;
+snprintf(buf,sizeof(buf)-1,"%d\n",getpid());
+n = write(fd,buf,strlen(buf));
+fd = close(fd);
+pid_file_ok = fd == 0 && n == strlen(buf);
+return pid_file_ok == 0;
+}
+
+static int is_valid_pidfile(char *pfile,int nocreate) {
+int fd;
+ssize_t n;
+char buf[64];
+struct stat st;
+
+fd = open(pfile,O_RDONLY);
+if(fd < 0) 
+	return nocreate ? 0 : create_pidfile(pfile);
+bzero(buf,sizeof(buf));
+n = read(fd,buf,sizeof(buf)-1);
+close(fd);
+if(n > 0) {
+	int pid;
+	if(sscanf(buf,"%d",&pid) == 1) {
+		snprintf(buf,sizeof(buf)-1,"/proc/%d",pid);
+		if(stat(buf,&st) < 0) {
+			return nocreate ? 0 : create_pidfile(pfile);
+		}
+	}
+	return 1;
+}
+return nocreate ? 0 : create_pidfile(pfile);
+}
+//}}}}
+
 static void *log_init(struct fuse_conn_info *conn)
 //			struct fuse_config *cfg)
 {
@@ -76,7 +119,13 @@ static void *log_init(struct fuse_conn_info *conn)
 		fprintf(stderr,"run_readers error\n");
 		kill(0,SIGTERM);
 	}
-	return NULL;
+	if(PidFile) {
+	        if(is_valid_pidfile(PidFile,0)) {
+        	        fprintf(stderr,"Found valid PID file %s\n",PidFile);
+                	kill(0,SIGTERM);
+	        }
+	}
+return NULL;
 }
 
 static int log_getattr(const char *path, struct stat *stbuf)
@@ -210,10 +259,18 @@ int main(int argc, char *argv[])
 		fprintf(stderr,"Config error\n");
 		exit(1);
 	    }
+	    if(PidFile) {
+	        if(is_valid_pidfile(PidFile,1)) {
+        	        fprintf(stderr,"Found valid PID file %s\n",PidFile);
+                	exit(1);
+	        }
+	    }
+
 	}
 	ret = fuse_main(args.argc, args.argv, &log_oper, NULL);
 	stop_readers();
 	fprintf(stderr,"exit\n");
+	if(PidFile) unlink(PidFile);
 	fuse_opt_free_args(&args);
 	return ret;
 }

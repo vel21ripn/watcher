@@ -20,6 +20,8 @@
 
 static const int signum = SIGUSR2;
 
+char *PidFile = NULL;
+
 struct reader_helper *RD[READER_CFG_MAX];
 int RD_count = 0;
 struct reader_config {
@@ -346,6 +348,10 @@ static int cfg_print(char *key,const char *val,void *data) {
 struct reader_config *rc;
 char *par;
 
+    if(!strcmp(key,"PidFile")) {
+	PidFile = strdup(val);
+	return 0;
+    }
     if(!strncmp(key,"default.",8) || !strncmp(key,"source.",7)) {
 	par = NULL;
 	rc = find_rc(key,&par);
