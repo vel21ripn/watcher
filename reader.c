@@ -14,6 +14,7 @@
 #include <sys/time.h>
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
+#include <pcre.h>
 
 #include "reader.h"
 #include "yaml-parser.h"
@@ -22,12 +23,28 @@ static const int signum = SIGUSR2;
 
 char *PidFile = NULL;
 
+struct file_str {
+	struct file_str *next;
+	char str[];
+};
+
+pthread_mutex_t fc_mutex;
+
+struct file_cache {
+	char		name[256];
+	time_t		rt;
+	int		lines;
+	struct file_str *data;
+} file_cache[READER_CFG_MAX];
+
 struct reader_helper *RD[READER_CFG_MAX];
 int RD_count = 0;
 struct reader_config {
         int             line,word,p_int,delta,numbers;
         char            name[32];
         char            *file;
+        char            *filter;
+	pcre		*re;
 };
 
 static struct reader_config default_rc = { .name="default" },
@@ -47,23 +64,98 @@ void reader_update_result(struct reader_helper *rr) {
 #endif
 }
 
-int reader_get_data(struct reader_helper *rr) {
+void free_reader_cache(struct file_cache *rc) {
+struct file_str *c,*n;
+for(n = NULL, c = rc->data; c; c = n) {
+	n = c->next;
+	free(c);
+}
+rc->data = NULL;
+rc->lines = 0;
+}
+
+struct file_cache *reader_fetch_data(char *file,int p_int) {
+int i,l;
 FILE *fd;
+char line_buf[512],*str;
+struct file_str *c,*n;
+time_t tm = time(NULL);
+//	fprintf(stderr,"Fetch %s\n",file);
+
+	for(i=0; i < READER_CFG_MAX && file_cache[i].name[0]; i++) {
+		if(!strcmp(file_cache[i].name,file)) {
+			if(file_cache[i].rt > tm-p_int) {
+//				fprintf(stderr,"Cached %s from %d\n",file,i);
+				return &file_cache[i];
+			} else {
+//				fprintf(stderr,"Expired %s from %d\n",file,i);
+				break;
+			}
+		}
+	}
+	if(i >= READER_CFG_MAX) return NULL;
+//	fprintf(stderr,"Read %d %s\n",i,file);
+	strncpy(file_cache[i].name,file,sizeof(file_cache[i].name)-1);
+	free_reader_cache(&file_cache[i]);
+
+	fd = fopen(file,"r");
+	if(!fd) return NULL;
+	n = NULL;
+	c = NULL;
+	while((str = fgets(line_buf,sizeof(line_buf)-1,fd)) != NULL) {
+		l = strlen(str);
+		if(l > 0 && str[l-1] == '\n') {
+			l--;
+			str[l] = '\0';
+		}
+		c = malloc(sizeof(struct file_str)+l+2);
+		if(!c) return NULL; //FIXME
+		c->next = NULL;
+		strcpy(&c->str[0],str);
+		if(!file_cache[i].data) file_cache[i].data = c;
+		if(n) n->next = c;
+		n = c;
+		file_cache[i].lines++;
+//		fprintf(stderr,"Fetch %d:%d:%s\n",i,file_cache[i].lines,str);
+	}
+	fclose(fd);
+	file_cache[i].rt = time(NULL);
+	return &file_cache[i];
+}
+
+
+int reader_get_data(struct reader_helper *rr) {
 char line_buf[512],*saveptr1,*str,*wt;
+struct file_cache *fc;
+struct file_str *fstr;
 int line,word,next,i;
 float v;
 	rr->stage = 1;
 	if(!rr || !rr->file[0]) return 1;
 
 	rr->stage++;
-	fd = fopen(rr->file,"r");
-	if(!fd) return 1;
+	pthread_mutex_lock(&fc_mutex);
+	fc = reader_fetch_data(rr->file,rr->p_int);
+	pthread_mutex_unlock(&fc_mutex);
+	if(!fc) return 1;
 	rr->stage++;
-	for(line=1; line <= rr->line; line++) {
-		str = fgets(line_buf,sizeof(line_buf)-1,fd);
-		if(!str) break;
+	fstr = fc->data;
+	for(line=1; fstr && line <= rr->line; fstr = fstr->next ) {
+		strncpy(line_buf,fstr->str,sizeof(line_buf));
+		str = line_buf;
+//		fprintf(stderr,"Line %d %s\n",rr->line,line_buf);
+		if(rr->re) {
+			int pcreExecRet;
+			int mvector[32];
+			pcreExecRet = pcre_exec(rr->re,NULL,str,strlen(str),
+					0,0,mvector,32);
+			if(pcreExecRet >= 0) {
+				line++;
+			}
+		} else {
+			line++;
+		}
 	}
-	fclose(fd);
 	if(!str) return 1;
 
 	rr->stage++;
@@ -82,12 +174,13 @@ float v;
 	if(*saveptr1) return 1;
 
 	rr->stage = 0;
-//	fprintf(stderr,"value %d %g OK\n",rr->word,v);
+	if(rr->re)
 	if(rr->delta) {
-		float t = v - rr->value_delta;
+		float t = rr->values_count ? v - rr->value_delta : 0;
 		rr->value_delta = v;
 		v = t;
 	}
+	fprintf(stderr,"value %s %g OK\n",rr->name,v);
 	rr->value_last = v;
 	if(rr->values_count < rr->numbers) {
 		if(rr->values_count) rr->value_index++;
@@ -252,10 +345,14 @@ void delete_reader(struct reader_helper *rr) {
 	free(rr);
 }
 
-struct reader_helper *create_reader(char *name,char *file,int line,int word,int interval,int delta,int numbers) {
+struct reader_helper *create_reader(char *name,char *file,
+		int line,int word,int interval,int delta,int numbers,
+		char *filter) {
 
 struct reader_helper *rr;
 int i;
+int err_pos;
+const char *re_err;
 
 	if(numbers > READER_CFG_MAX) return NULL;
 	if(!interval  || interval > 600) return NULL;
@@ -267,6 +364,7 @@ int i;
 	bzero((char *)rr,sizeof(*rr));
 	strncpy(rr->name,name,sizeof(rr->name)-1);
 	strncpy(rr->file,file,sizeof(rr->file)-1);
+	if(filter) strncpy(rr->filter,filter,sizeof(rr->filter)-1);
 	rr->line = line;
 	rr->word = word;
 	rr->p_int = interval;
@@ -275,6 +373,8 @@ int i;
 	for(i = 0; i < READER_CFG_MAX; i++) rr->values[i] = 0.0;
 	rr->value_last = rr->value_min = rr->value_max = 0.0;
 	strcpy(rr->result,"none\n");
+	if(filter)
+		rr->re = pcre_compile(rr->filter,0,&re_err,&err_pos,NULL);
 	return rr;
 }
 
@@ -358,7 +458,6 @@ char *par;
 	if(rc) {
 		if(!par) return 0;
 		if(!strcmp(par,"file")) {
-
 			rc->file = strdup(val);
 			return 0;
 		}
@@ -380,6 +479,19 @@ char *par;
 		}
 		if(!strcmp(par,"number")) {
 			rc->numbers = strtol(val,NULL,10);
+			return 0;
+		}
+		if(!strcmp(par,"filter")) {
+			const char* error;
+			int erroroffset;
+			rc->filter = strdup(val);
+			if(!rc->filter) abort();
+			rc->re = pcre_compile(rc->filter,0,&error,&erroroffset, NULL);
+			if(rc->re == NULL) {
+				fprintf(stderr,"Bad re: %s pos %d\n",error,erroroffset);
+				abort();
+			}
+			pcre_free(rc->re);
 			return 0;
 		}
 	}
@@ -416,7 +528,7 @@ int i;
 		}
 		merge_config(&RC[i],&default_rc);
 		RD[i] = create_reader(RC[i].name,RC[i].file,RC[i].line,RC[i].word,
-				RC[i].p_int,RC[i].delta,RC[i].numbers);
+				RC[i].p_int,RC[i].delta,RC[i].numbers,RC[i].filter);
 		if(!RD[i]) {
 			stop_readers();
 			return 1;
@@ -426,7 +538,12 @@ int i;
 	for(i=0; i < READER_CFG_MAX && RC[i].name[0]; i++) {
 		free(RC[i].file);
 		RC[i].file = NULL;
+		if(RC[i].filter) {
+			free(RC[i].filter);
+			RC[i].filter = NULL;
+		}
 	}
+	pthread_mutex_init(&fc_mutex,NULL);
 	return 0;
 }
 

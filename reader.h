@@ -14,6 +14,8 @@ struct reader_helper {
 	char		result[64];
 	char		file[256];
 	char 		name[32];
+	char 		filter[64];
+	pcre		*re;
 };
 
 
@@ -23,7 +25,9 @@ int run_readers(void);
 int count_readers(void);
 void stop_readers(void);
 
-struct reader_helper *create_reader(char *name,char *file,int line,int word,int interval,int delta,int numbers);
+struct reader_helper *create_reader(char *name,
+		char *file,int line,int word,int interval,int delta,int numbers,
+		char *filter);
 void delete_reader(struct reader_helper *);
 
 extern struct reader_helper *RD[READER_CFG_MAX];

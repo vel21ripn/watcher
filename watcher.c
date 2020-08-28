@@ -35,6 +35,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <fuse.h>
+#include <pcre.h>
 
 #include "yaml-parser.h"
 #include "reader.h"

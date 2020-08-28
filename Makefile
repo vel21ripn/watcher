@@ -1,7 +1,7 @@
 
 # pkg-config fuse --cflags --libs
-CCFLAGS=-D_REENTRANT -D_FILE_OFFSET_BITS=64 -I/usr/include/fuse -Wall -pedantic -pedantic-errors
-LDFLAGS=-pthread -lfuse -lyaml -lrt
+CCFLAGS=-g -O0 -D_REENTRANT -D_FILE_OFFSET_BITS=64 -I/usr/include/fuse -Wall -pedantic -pedantic-errors
+LDFLAGS=-pthread -lfuse -lyaml -lrt -lpcre
 
 watcher: watcher.o yaml-parser.o reader.o
 	gcc -o $@ $^ $(LDFLAGS)
