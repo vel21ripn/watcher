@@ -11,11 +11,12 @@ struct reader_helper {
 	int		values_count,value_index,stage;
 	float		values[READER_MAX_NUMBER],value_delta,
 			value_last,value_min,value_max,value_sum;
-	char		result[64];
-	char		file[256];
+	char		fmt[16];
 	char 		name[32];
-	char 		filter[64];
-	pcre		*re;
+	char		file[256];
+	char		result[64];
+	char 		filter[64],subst[64];
+	pcre		*re,*s_re;
 };
 
 
@@ -25,9 +26,9 @@ int run_readers(void);
 int count_readers(void);
 void stop_readers(void);
 
-struct reader_helper *create_reader(char *name,
-		char *file,int line,int word,int interval,int delta,int numbers,
-		char *filter);
+struct reader_config;
+
+struct reader_helper *create_reader(struct reader_config *rc);
 void delete_reader(struct reader_helper *);
 
 extern struct reader_helper *RD[READER_CFG_MAX];

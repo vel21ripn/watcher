@@ -41,10 +41,10 @@ struct reader_helper *RD[READER_CFG_MAX];
 int RD_count = 0;
 struct reader_config {
         int             line,word,p_int,delta,numbers;
-        char            name[32];
+        char            name[32],merge[32],fmt[16];
         char            *file;
-        char            *filter;
-	pcre		*re;
+        char            *filter, *subst;
+	pcre		*re,*s_re;
 };
 
 static struct reader_config default_rc = { .name="default" },
@@ -52,11 +52,13 @@ static struct reader_config default_rc = { .name="default" },
 
 
 void reader_update_result(struct reader_helper *rr) {
+	char ofmt[128];
 	float avg = rr->value_last;
 	if(rr->values_count > 1) {
 		avg = rr->value_sum / rr->values_count;
 	}
-	snprintf(rr->result,sizeof(rr->result)-1,"%g %g %g %g %d\n",
+	snprintf(ofmt,sizeof(ofmt)-1,"%s %s %s %s %%d\n",rr->fmt,rr->fmt,rr->fmt,rr->fmt);
+	snprintf(rr->result,sizeof(rr->result)-1,ofmt,
 		rr->value_last,avg,rr->value_min,rr->value_max,rr->values_count);
 #if 0
 	for(i=0; i < rr->values_count; i++)
@@ -170,11 +172,23 @@ float v;
 
 	rr->stage++;
 //	fprintf(stderr,"Word %d '%s' OK\n",rr->word,wt);
+	if(rr->s_re) {
+		int mvector[16];
+		int pcreExecRet = pcre_exec(rr->s_re,NULL,wt,strlen(wt), 0,0,mvector,16);
+//		fprintf(stderr,"pcre_exec %d %d %d OK\n",pcreExecRet,mvector[2],mvector[3]);
+		if(pcreExecRet >= 2) {
+			wt[mvector[3]] = '\0';
+			wt += mvector[2];
+//			fprintf(stderr,"subst '%s' OK\n",wt);
+		} else {
+			*wt = '\0';
+			fprintf(stderr,"subst RE not match!\n");
+		}
+	}
 	v = strtof(wt,&saveptr1);
 	if(*saveptr1) return 1;
 
 	rr->stage = 0;
-	if(rr->re)
 	if(rr->delta) {
 		float t = rr->values_count ? v - rr->value_delta : 0;
 		rr->value_delta = v;
@@ -348,36 +362,38 @@ void delete_reader(struct reader_helper *rr) {
 	free(rr);
 }
 
-struct reader_helper *create_reader(char *name,char *file,
-		int line,int word,int interval,int delta,int numbers,
-		char *filter) {
+struct reader_helper *create_reader(struct reader_config *rc) {
 
 struct reader_helper *rr;
 int i;
 int err_pos;
 const char *re_err;
 
-	if(numbers > READER_CFG_MAX) return NULL;
-	if(!interval  || interval > 600) return NULL;
+	if(rc->numbers > READER_CFG_MAX) return NULL;
+	if(!rc->p_int  || rc->p_int > 600) return NULL;
 
 	rr = calloc(1,sizeof(*rr));
 
 	if(!rr) return rr;
 
 	bzero((char *)rr,sizeof(*rr));
-	strncpy(rr->name,name,sizeof(rr->name)-1);
-	strncpy(rr->file,file,sizeof(rr->file)-1);
-	if(filter) strncpy(rr->filter,filter,sizeof(rr->filter)-1);
-	rr->line = line;
-	rr->word = word;
-	rr->p_int = interval;
-	rr->delta = delta != 0;
-	rr->numbers = numbers;
+	strncpy(rr->name,rc->name,sizeof(rr->name)-1);
+	strncpy(rr->file,rc->file,sizeof(rr->file)-1);
+	strncpy(rr->fmt, rc->fmt ? rc->fmt:"%g",sizeof(rr->fmt)-1);
+	if(rc->filter) strncpy(rr->filter,rc->filter,sizeof(rr->filter)-1);
+	if(rc->subst) strncpy(rr->subst,rc->subst,sizeof(rr->subst)-1);
+	rr->line = rc->line;
+	rr->word = rc->word;
+	rr->p_int = rc->p_int;
+	rr->delta = rc->delta != 0;
+	rr->numbers = rc->numbers;
 	for(i = 0; i < READER_CFG_MAX; i++) rr->values[i] = 0.0;
 	rr->value_last = rr->value_min = rr->value_max = 0.0;
 	strcpy(rr->result,"none\n");
-	if(filter)
+	if(rc->filter)
 		rr->re = pcre_compile(rr->filter,0,&re_err,&err_pos,NULL);
+	if(rc->subst)
+		rr->s_re = pcre_compile(rr->subst,0,&re_err,&err_pos,NULL);
 	return rr;
 }
 
@@ -393,7 +409,7 @@ int run_reader_helper(struct reader_helper *rr) {
 
 
 
-void merge_config(struct reader_config *rc,struct reader_config *std) {
+void merge_config_default(struct reader_config *rc,const struct reader_config *std) {
 const char *w = "unknown";
 do {
   w = "line";
@@ -408,14 +424,31 @@ do {
   w = "number";
   if(!rc->numbers) rc->numbers = std->numbers;
   if(!rc->numbers) break;
+
+  if(!rc->fmt[0]) strncpy(rc->fmt,std->fmt,sizeof(rc->fmt));
+  if(!rc->fmt[0]) strncpy(rc->fmt,"%g",sizeof(rc->fmt));
+
   if(!rc->delta) rc->delta = std->delta;
   return;
 } while(0);
-fprintf(stderr,"Invalid options %s for %s\n",w,rc->name);
+
+fprintf(stderr,"Invalid default options '%s' for %s\n",w,rc->name);
 exit(1);
 }
 
-struct reader_config *find_rc(const char *key,char **par) {
+void merge_config(struct reader_config *rc,const struct reader_config *std) {
+  if(!rc->line) rc->line = std->line;
+  if(!rc->word) rc->word = std->word;
+  if(!rc->p_int) rc->p_int = std->p_int;
+  if(!rc->numbers) rc->numbers = std->numbers;
+  if(!rc->fmt[0]) strncpy(rc->fmt,std->fmt,sizeof(rc->fmt));
+  if(!rc->delta) rc->delta = std->delta;
+  if(!rc->filter) rc->filter = std->filter;
+  if(!rc->subst) rc->subst = std->subst;
+}
+
+
+struct reader_config *find_rc(const char *key,char **par,int no_add) {
     char *c;
     static char kbuf[64];
     int i;
@@ -434,16 +467,32 @@ struct reader_config *find_rc(const char *key,char **par) {
     for(i=0; i < READER_CFG_MAX; i++) {
 	if(RC[i].name[0]) {
 		if(!strcmp(kbuf,RC[i].name)) {
-//			fprintf(stderr,"Return %s %d\n",kbuf,i);
+//			fprintf(stderr,"%s: Return '%s' %d\n",__func__,kbuf,i);
 			return &RC[i];
 		}
 		continue;
 	}
-//	fprintf(stderr,"Add %s %d\n",kbuf,i);
+	if(no_add) return NULL;
+//	fprintf(stderr,"%s: Add '%s' %d\n",__func__,kbuf,i);
 	strncpy(RC[i].name,kbuf,sizeof(RC[i].name));
 	return &RC[i];
     }
     return NULL;
+}
+
+static int cfg_valid_re(const char *str_re) {
+const char* error;
+int erroroffset;
+pcre *re;
+	if(!str_re) return 0;
+//	fprintf(stderr,"%s: %s\n",__func__,str_re);
+	re = pcre_compile(str_re,0,&error,&erroroffset, NULL);
+	if(re == NULL) {
+		fprintf(stderr,"Bad re: %s pos %d\n",error,erroroffset);
+		return 0;
+	}
+	pcre_free(re);
+	return 1;
 }
 
 static int cfg_error = 0;
@@ -457,7 +506,7 @@ char *par;
     }
     if(!strncmp(key,"default.",8) || !strncmp(key,"source.",7)) {
 	par = NULL;
-	rc = find_rc(key,&par);
+	rc = find_rc(key,&par,0);
 	if(rc) {
 		if(!par) return 0;
 		if(!strcmp(par,"file")) {
@@ -485,16 +534,23 @@ char *par;
 			return 0;
 		}
 		if(!strcmp(par,"filter")) {
-			const char* error;
-			int erroroffset;
+			if(!cfg_valid_re(val)) { cfg_error = 1; return 0; }
 			rc->filter = strdup(val);
 			if(!rc->filter) abort();
-			rc->re = pcre_compile(rc->filter,0,&error,&erroroffset, NULL);
-			if(rc->re == NULL) {
-				fprintf(stderr,"Bad re: %s pos %d\n",error,erroroffset);
-				abort();
-			}
-			pcre_free(rc->re);
+			return 0;
+		}
+		if(!strcmp(par,"subst")) {
+			if(!cfg_valid_re(val)) { cfg_error = 1; return 0; }
+			rc->subst = strdup(val);
+			if(!rc->subst) abort();
+			return 0;
+		}
+		if(!strcmp(par,"fmt")) {
+			strncpy(rc->fmt,val,sizeof(rc->fmt)-1);
+			return 0;
+		}
+		if(!strcmp(par,"merge")) {
+			strncpy(rc->merge,val,sizeof(rc->merge)-1);
 			return 0;
 		}
 	}
@@ -520,7 +576,7 @@ int i;
 	if(!cfg) return 1;
 
 	if(!yaml_config_pairs(cfg,buf,sizeof(buf),cfg_print,NULL) || cfg_error) {
-//		fprintf(stderr,"cfg error\n");
+//		fprintf(stderr,"cfg error %d\n",cfg_error);
 		return 1;
 	}
 
@@ -529,9 +585,19 @@ int i;
 			stop_readers();
 			return 1;
 		}
-		merge_config(&RC[i],&default_rc);
-		RD[i] = create_reader(RC[i].name,RC[i].file,RC[i].line,RC[i].word,
-				RC[i].p_int,RC[i].delta,RC[i].numbers,RC[i].filter);
+		if(RC[i].merge[0]) {
+			char *par = NULL,m_key[64];
+			strcpy(m_key,"source.");
+			strcat(m_key,RC[i].merge);
+			struct reader_config *rc = find_rc(m_key,&par,1);
+			if(!rc) {
+				fprintf(stderr,"Name '%s' not found\n",RC[i].merge);
+				return 1;
+			}
+			merge_config(&RC[i],rc);
+		}
+		merge_config_default(&RC[i],&default_rc);
+		RD[i] = create_reader(&RC[i]);
 		if(!RD[i]) {
 			stop_readers();
 			return 1;

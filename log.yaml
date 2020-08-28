@@ -5,37 +5,36 @@ default:
        interval: 5
        number: 5
        delta: 0
+       fmt: "%.0f"
 source:
    cputerm:
        file: /sys/class/hwmon/hwmon0/temp1_input
+       subst: "^(\\d+)...$"
    softirq:
        file: /proc/stat
-       delta: 1
        filter: "^cpu"
+       delta: 1
        word: 8
+       interval: 3
+       number: 8
+       fmt: "%.1f"
    softirq0:
        file: /proc/stat
-       delta: 1
        filter: "^cpu0"
-       word: 8
+       merge: softirq
    softirq1:
        file: /proc/stat
-       delta: 1
        filter: "^cpu1"
-       word: 8
+       merge: softirq
    softirq2:
        file: /proc/stat
-       delta: 1
        filter: "^cpu2"
-       word: 8
+       merge: softirq
    softirq3:
        file: /proc/stat
-       delta: 1
        filter: "^cpu3"
-       word: 8
+       merge: softirq
    softirq4:
        file: /proc/stat
-       delta: 1
        filter: "^cpu4"
-       word: 8
-
+       merge: softirq
