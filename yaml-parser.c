@@ -59,58 +59,57 @@ int yaml_config_pairs(char *cfg_file,char *keybuf,size_t keysize, yaml_config_pa
         yaml_parser_scan(&parser, &token);
         switch(token.type)
         {
-        case YAML_STREAM_START_TOKEN:
-            if(_yaml_trace_parser) puts("STREAM START"); break;
-        case YAML_STREAM_END_TOKEN:
-            if(_yaml_trace_parser) puts("STREAM END");   break;
-        case YAML_DOCUMENT_START_TOKEN:
-            if(_yaml_trace_parser) puts("DOC START"); break;
-        case YAML_DOCUMENT_END_TOKEN:
-            if(_yaml_trace_parser) puts("DOC END");   break;
-        case YAML_BLOCK_SEQUENCE_START_TOKEN:
-            if(_yaml_trace_parser) puts("\t<b>Start Block (Sequence)</b>"); break;
+        case YAML_STREAM_START_TOKEN:    if(_yaml_trace_parser) puts("STREAM START");
+										 break;
+        case YAML_STREAM_END_TOKEN:      if(_yaml_trace_parser) puts("STREAM END");
+										 break;
+        case YAML_DOCUMENT_START_TOKEN:  if(_yaml_trace_parser) puts("DOC START");
+										 break;
+        case YAML_DOCUMENT_END_TOKEN:    if(_yaml_trace_parser) puts("DOC END");
+										 break;
+        case YAML_BLOCK_SEQUENCE_START_TOKEN: if(_yaml_trace_parser) puts("\t<b>Start Block (Sequence)</b>");
+										 break;
 
-        case YAML_KEY_TOKEN:
-            if(_yaml_trace_parser)printf("\t(Key token)   "); 
-            path[++ipath] = P_KEY; break;
-        case YAML_VALUE_TOKEN:
-            if(_yaml_trace_parser)printf("\t(Value token) ");
-            path[++ipath] = P_VAL; break;
+        case YAML_KEY_TOKEN:     if(_yaml_trace_parser)printf("\t(Key token)   "); 
+                                 path[++ipath] = P_KEY;
+								 break;
+        case YAML_VALUE_TOKEN:   if(_yaml_trace_parser)printf("\t(Value token) ");
+                                 path[++ipath] = P_VAL;
+								 break;
         case YAML_BLOCK_ENTRY_TOKEN:
-            if(_yaml_trace_parser) puts("\t<b>Start Block (Entry)</b>");    
-            path[++ipath] = P_SEQ; break;
-
+                                 if(_yaml_trace_parser) puts("\t<b>Start Block (Entry)</b>");    
+                                 path[++ipath] = P_SEQ;
+								 break;
         case YAML_BLOCK_END_TOKEN:
-            if(_yaml_trace_parser)  puts("\t<b>End block</b>");
-            if(path[ipath] == P_LVL) ipath--;
+                                 if(_yaml_trace_parser)  puts("\t<b>End block</b>");
+                                 if(path[ipath] == P_LVL) ipath--;
 
-            if(path[ipath] == P_VAL &&
-               path[ipath-2] == P_KEY ) {
-                ipath-=3;
-            }
-            break;
+                                 if(path[ipath] == P_VAL &&
+                                    path[ipath-2] == P_KEY ) ipath-=3;
+                                 break;
         case YAML_BLOCK_MAPPING_START_TOKEN:
-            if(_yaml_trace_parser) puts("\n\t[Block mapping]");
-            path[++ipath] = P_LVL;  break;
+                                 if(_yaml_trace_parser) puts("\n\t[Block mapping]");
+                                 path[++ipath] = P_LVL;
+								 break;
         case YAML_SCALAR_TOKEN:
-            if(_yaml_trace_parser)printf("\tscalar %s \n", token.data.scalar.value);
-            path[++ipath] = strdup((char *)token.data.scalar.value);
+                                if(_yaml_trace_parser)printf("\tscalar %s \n", token.data.scalar.value);
+                                path[++ipath] = strdup((char *)token.data.scalar.value);
 
-            if(path[ipath-1] == P_VAL || path[ipath-1] == P_SEQ) { 
-                 print_path(path,ipath,keybuf,keysize);
-                 callback(keybuf,path[ipath],data);
-            }
+                                if(path[ipath-1] == P_VAL || path[ipath-1] == P_SEQ) { 
+                                     print_path(path,ipath,keybuf,keysize);
+                                     callback(keybuf,path[ipath],data);
+                                }
 
-            if(path[ipath-1] == P_VAL && path[ipath-3] == P_KEY) {
-                 free(path[ipath]);
-                 free(path[ipath-2]);
-                 ipath -= 4;
-            }
-            if(path[ipath-1] == P_SEQ) {
-                 free(path[ipath]);
-                 ipath -= 2;
-            }
-            break;
+                                if(path[ipath-1] == P_VAL && path[ipath-3] == P_KEY) {
+                                     free(path[ipath]);
+                                     free(path[ipath-2]);
+                                     ipath -= 4;
+                                }
+                                if(path[ipath-1] == P_SEQ) {
+                                     free(path[ipath]);
+                                     ipath -= 2;
+                                }
+                                break;
         default:
             if(_yaml_trace_parser) printf("Got token of type %d\n", token.type);
         }
