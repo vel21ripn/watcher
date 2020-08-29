@@ -20,6 +20,7 @@
 
 
 #define FUSE_USE_VERSION 29
+#define _GNU_SOURCE
 
 #include <pthread.h>
 #include <fcntl.h>
@@ -34,6 +35,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <signal.h>
+#include <getopt.h>
 #include <fuse.h>
 #include <pcre.h>
 
@@ -49,15 +51,12 @@
  */
 
 static struct options {
-	char *config;
 	int show_help;
 } options;
 
 #define OPTION(t, p, v)                           \
     { t, offsetof(struct options, p), v }
 static const struct fuse_opt option_spec[] = {
-	OPTION("-C %s", config, 1),
-	OPTION("--config=%s", config, 1),
 	OPTION("-h", show_help, 0),
 	OPTION("--help", show_help, 0),
 	FUSE_OPT_END
@@ -223,50 +222,82 @@ static const struct fuse_operations log_oper = {
 
 static void show_help(const char *progname)
 {
-	printf("usage: %s options mountpoint\n\n", progname);
+	printf("usage: %s options [mountpoint]\n\n", progname);
 	printf("File-system specific options:\n"
 	       "   -C cfg\n"
 	       "   --config=cfg          Name of configuration file\n"
+	       "   -d                    Run in debug mode.\n"
 	       "\n");
 }
+
+static struct option long_options[] = {
+	   {"help",    no_argument,       0, 'h' },
+	   {"debug",   no_argument,       0, 'd' },
+	   {"config",  required_argument, 0, 'C'},
+	   {0,         0,                 0,  0 }
+};
 
 int main(int argc, char *argv[])
 {
 	int ret;
-	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-	
-	
-	/* Parse options */
+        int opt, option_index = 0,debug = 0,help = 0;
+	char *cfg_opt = NULL;
+	struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
+
+	fuse_opt_add_arg(&args, argv[0]);
+
+        while((opt = getopt_long(argc, argv, "dhC:", long_options, &option_index)) != EOF) {
+	  switch (opt) {
+	    case 'd': debug++;  break;
+	    case 'h': help = 1; break;
+	    case 'C': cfg_opt = strdup(optarg); break;
+	    default: show_help(argv[0]);
+		     exit(1);
+	  }
+	}
+
+	if(help) {
+	    show_help(argv[0]);
+	    fuse_opt_add_arg(&args, "--help");
+	    ret = fuse_main(args.argc, args.argv, &log_oper, NULL);
+	    exit(0);
+	}
+
+	if(!cfg_opt) show_help(argv[0]);
+
+	if(parse_readers(cfg_opt)) {
+		fprintf(stderr,"Config error\n");
+		exit(1);
+	}
+	if(debug)
+	    fuse_opt_add_arg(&args, "-d");
+	if(fuse_mount_options) {
+	    char *tok,*next=NULL;
+	    while((tok = strtok_r(fuse_mount_options," \t",&next)) != NULL) {
+	    	fuse_opt_add_arg(&args, tok);
+		fuse_mount_options = NULL;
+	    }
+	}
+	if(optind < argc) {
+		if(fuse_mount_point)
+			fprintf(stderr,"Override mount point from config!\n");
+		fuse_mount_point = strdup(argv[optind]);
+	}
+
+	if(!fuse_mount_point) {
+	    fprintf(stderr,"Missing mount point\n");
+	    exit(1);
+	}
+    	fuse_opt_add_arg(&args, fuse_mount_point);
+
 	if (fuse_opt_parse(&args, &options, option_spec, NULL) == -1)
 		return 1;
 
-	if(!options.config) {
-		show_help(argv[0]);
-		options.show_help = 1;
-	}
-
-	/* When --help is specified, first print our own file-system
-	   specific help text, then signal fuse_main to show
-	   additional help (by adding `--help` to the options again)
-	   without usage: line (by setting argv[0] to the empty
-	   string) */
-
-	if (options.show_help) {
-		show_help(argv[0]);
-		fuse_opt_add_arg(&args, "--help");
-		args.argv[0][0] = '\0';
-	} else {
-	    if(parse_readers(options.config)) {
-		fprintf(stderr,"Config error\n");
-		exit(1);
+	if(PidFile) {
+	    if(is_valid_pidfile(PidFile,1)) {
+       	        fprintf(stderr,"Found valid PID file %s\n",PidFile);
+               	exit(1);
 	    }
-	    if(PidFile) {
-	        if(is_valid_pidfile(PidFile,1)) {
-        	        fprintf(stderr,"Found valid PID file %s\n",PidFile);
-                	exit(1);
-	        }
-	    }
-
 	}
 	ret = fuse_main(args.argc, args.argv, &log_oper, NULL);
 	stop_readers();

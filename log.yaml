@@ -1,4 +1,8 @@
 ---
+PidFile: /run/watcher_1.pid
+fuse:
+       mountpoint: /tmpfs/x
+       options: "-o allow_other"
 default:
        line: 1
        word: 1

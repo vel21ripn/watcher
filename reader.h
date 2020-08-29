@@ -34,3 +34,5 @@ void delete_reader(struct reader_helper *);
 extern struct reader_helper *RD[READER_CFG_MAX];
 extern int RD_count;
 extern char *PidFile;
+extern char *fuse_mount_options;
+extern char *fuse_mount_point;

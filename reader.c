@@ -23,6 +23,9 @@ static const int signum = SIGUSR2;
 
 char *PidFile = NULL;
 
+char *fuse_mount_point = NULL;
+char *fuse_mount_options = NULL;
+
 struct file_str {
 	struct file_str *next;
 	char str[];
@@ -503,6 +506,17 @@ char *par;
     if(!strcmp(key,"PidFile")) {
 	PidFile = strdup(val);
 	return 0;
+    }
+    if(!strncmp(key,"fuse.",5)) {
+	par = key+5;
+	if(!strcmp(par,"options")) {
+		fuse_mount_options = strdup(val);
+		return 0;
+	}
+	if(!strcmp(par,"mountpoint")) {
+		fuse_mount_point = strdup(val);
+		return 0;
+	}
     }
     if(!strncmp(key,"default.",8) || !strncmp(key,"source.",7)) {
 	par = NULL;
