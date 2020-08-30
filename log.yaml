@@ -22,23 +22,13 @@ source:
        interval: 3
        number: 8
        fmt: "%.1f"
-   softirq0:
-       file: /proc/stat
-       filter: "^cpu0"
-       merge: softirq
-   softirq1:
-       file: /proc/stat
-       filter: "^cpu1"
-       merge: softirq
-   softirq2:
-       file: /proc/stat
-       filter: "^cpu2"
-       merge: softirq
-   softirq3:
-       file: /proc/stat
-       filter: "^cpu3"
-       merge: softirq
-   softirq4:
-       file: /proc/stat
-       filter: "^cpu4"
-       merge: softirq
+       alias:
+         softirq0:
+           filter: "^cpu0"
+         softirq1:
+           filter: "^cpu1"
+         softirq2:
+           filter: "^cpu2"
+         softirq3:
+           filter: "^cpu3"
+                

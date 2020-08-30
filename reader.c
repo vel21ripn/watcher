@@ -31,6 +31,11 @@ struct file_str {
 	char str[];
 };
 
+#define BUF_TIME_SIZE 32
+char *getctm(char *buf);
+
+static int debug_cmd_helper = 0;
+
 pthread_mutex_t fc_mutex;
 
 struct file_cache {
@@ -48,6 +53,7 @@ struct reader_config {
         char            *file;
         char            *filter, *subst;
 	pcre		*re,*s_re;
+	struct reader_config *alias;
 };
 
 static struct reader_config default_rc = { .name="default" },
@@ -63,6 +69,7 @@ void reader_update_result(struct reader_helper *rr) {
 	snprintf(ofmt,sizeof(ofmt)-1,"%s %s %s %s %%d\n",rr->fmt,rr->fmt,rr->fmt,rr->fmt);
 	snprintf(rr->result,sizeof(rr->result)-1,ofmt,
 		rr->value_last,avg,rr->value_min,rr->value_max,rr->values_count);
+	rr->work = 1;
 #if 0
 	for(i=0; i < rr->values_count; i++)
 		l += snprintf(&rr->result[l],sizeof(rr->result)-1-l," %g",rr->values[i]);
@@ -129,7 +136,7 @@ time_t tm = time(NULL);
 }
 
 
-int reader_get_data(struct reader_helper *rr) {
+static int _reader_get_data(struct reader_helper *rr) {
 char line_buf[512],*saveptr1,*str,*wt;
 struct file_cache *fc;
 struct file_str *fstr;
@@ -146,7 +153,7 @@ float v;
 	rr->stage++;
 	fstr = fc->data;
 	for(line=1; fstr && line <= rr->line; fstr = fstr->next ) {
-		strncpy(line_buf,fstr->str,sizeof(line_buf));
+		strncpy(line_buf,fstr->str,sizeof(line_buf)-1);
 		str = line_buf;
 //		fprintf(stderr,"Line %d %s\n",rr->line,line_buf);
 		if(rr->re) {
@@ -185,7 +192,7 @@ float v;
 //			fprintf(stderr,"subst '%s' OK\n",wt);
 		} else {
 			*wt = '\0';
-			fprintf(stderr,"subst RE not match!\n");
+//			fprintf(stderr,"subst RE not match!\n");
 		}
 	}
 	v = strtof(wt,&saveptr1);
@@ -230,13 +237,52 @@ float v;
 	return 0;
 }
 
+int reader_get_data(struct reader_helper *rr,FILE *flog) {
+char tm_buf[BUF_TIME_SIZE];
+
+	int r = _reader_get_data(rr);
+	if(r) {
+		strcpy(rr->result,"0 0 0 0 0\n");
+		fprintf(flog,"%s %s %s reader_get_data error stage %d\n",
+			getctm(tm_buf),__func__,rr->name,rr->stage);
+		fflush(flog);
+	} else {
+		reader_update_result(rr);
+		if(debug_cmd_helper) {
+			fprintf(flog,"%s %s %s result %s",
+				getctm(tm_buf),__func__,rr->name,rr->result);
+			fflush(flog);
+		}
+	}
+	if(!rr->is_alias && rr->aliases) {
+		struct reader_helper *rra;
+		for(rra = rr->aliases; rra; rra = rra->aliases) {
+			int ra = _reader_get_data(rra);
+			if(ra) {
+				strcpy(rra->result,"0 0 0 0 0\n");
+				fprintf(flog,"%s %s %s reader_get_data error stage %d\n",
+					getctm(tm_buf),__func__,rra->name,rra->stage);
+				fflush(flog);
+				r = ra;
+			} else {
+				reader_update_result(rra);
+				if(debug_cmd_helper) {
+					fprintf(flog,"%s %s %s result %s",
+						getctm(tm_buf),__func__,rra->name,rra->result);
+					fflush(flog);
+				}
+			}
+		}
+	}
+	return r;
+}
+
 long int delta_tv(struct timeval *tv1,struct timeval *tv0) {
 int64_t t1 = tv1->tv_sec*1000 + tv1->tv_usec/1000;
 int64_t t0 = tv0->tv_sec*1000 + tv0->tv_usec/1000;
 return (long int)(t0 - t1);
 }
 
-#define BUF_TIME_SIZE 32
 static u_int64_t tv_start = 0;
 char *getctm(char *buf) {
 struct timeval tv0;
@@ -254,7 +300,6 @@ void my_sig_h(int s) {
 // nothing
 }
 
-static int debug_cmd_helper = 0;
 
 void *cmd_helper(void *par)
 {
@@ -315,20 +360,7 @@ if(debug_cmd_helper) {
 }
 
 do {
-	if(reader_get_data(rr)) {
-		strcpy(rr->result,"0 0 0 0 0\n");
-		fprintf(flog,"%s %s %s count %d reader_get_data error stage %d\n",
-			getctm(tm_buf),__func__,name,count,rr->stage);
-		fflush(flog);
-	} else {
-		reader_update_result(rr);
-	}
-
-	if(debug_cmd_helper) {
-		fprintf(flog,"%s %s %s count %d result %s",
-			getctm(tm_buf),__func__,name,count,rr->result);
-		fflush(flog);
-	}
+	reader_get_data(rr,flog);
 
 	sigemptyset(&sw);
 	sigaddset(&sw,signum);
@@ -397,6 +429,29 @@ const char *re_err;
 		rr->re = pcre_compile(rr->filter,0,&re_err,&err_pos,NULL);
 	if(rc->subst)
 		rr->s_re = pcre_compile(rr->subst,0,&re_err,&err_pos,NULL);
+	if(rc->alias) {
+	    struct reader_helper *rs = NULL;
+	    for(i=0; i <= RD_count; i++)
+		if(!strcmp(RD[i]->name,rc->alias->name)) { rs = RD[i]; break; }
+	    if(!rs) {
+		fprintf(stderr,"Unknown source rr->name\n");
+		return NULL;
+	    }
+	    rr->is_alias = 1;
+	    while(rs->aliases) rs = rs->aliases;
+	    rs->aliases = rr;
+	}
+#ifdef MAIN_TESTING
+	fprintf(stderr,"Create %s '%s'",rr->is_alias ? "alias":"source",rr->name);
+	if(rr->is_alias)
+		fprintf(stderr," from %s\n",rc->alias->name);
+	   else
+		fprintf(stderr," from %s\n",rr->file);
+	fprintf(stderr," Line %d, Word %d, interval %d, %s, n_val %d\n",
+			rr->line,rr->word,rr->p_int, rr->delta ? "counter":"abs", rr->numbers);
+	fprintf(stderr," fmt '%s', filter '%s' subst '%s'\n",
+			rr->fmt,rr->filter,rr->subst);
+#endif
 	return rr;
 }
 
@@ -450,11 +505,28 @@ void merge_config(struct reader_config *rc,const struct reader_config *std) {
   if(!rc->subst) rc->subst = std->subst;
 }
 
+void merge_config_alias(struct reader_config *rc) {
+const struct reader_config *std = rc->alias;
+
+  rc->file = strdup(std->file);
+  rc->p_int = std->p_int;
+  rc->numbers = std->numbers;
+  if(!rc->fmt[0]) strncpy(rc->fmt,std->fmt,sizeof(rc->fmt));
+  if(!rc->line) rc->line = std->line;
+  if(!rc->word) rc->word = std->word;
+  if(!rc->delta) rc->delta = std->delta;
+  if(!rc->filter) rc->filter = std->filter ? strdup(std->filter) : NULL;
+  if(!rc->subst) rc->subst = std->subst ? strdup(std->subst) : NULL;
+}
+
 
 struct reader_config *find_rc(const char *key,char **par,int no_add) {
     char *c;
-    static char kbuf[64];
+    static char kbuf[128];
     int i;
+#ifdef MAIN_TESTING
+    fprintf(stderr,"%s: %s\n",__func__,key);
+#endif
 
     if(!strncmp(key,"default.",8)) {
 	strncpy(kbuf,key+8,sizeof(kbuf)-1);
@@ -462,15 +534,22 @@ struct reader_config *find_rc(const char *key,char **par,int no_add) {
 //	fprintf(stderr,"Return default %s\n",kbuf);
 	return &default_rc;
     }
+    if(!strncmp(key,"source.",7)) {
     // source.name.par
-    strncpy(kbuf,key+7,sizeof(kbuf)-1);
+	strncpy(kbuf,key+7,sizeof(kbuf)-1);
+    } else if(!strncmp(key,"alias.",6)) {
+    // alias.name.par
+	strncpy(kbuf,key+6,sizeof(kbuf)-1);
+    } else return NULL;
+
     c = strchr(kbuf,'.');
     if(par) *par = c ? c+1:NULL;
     if(c) *c = '\0';
+//    fprintf(stderr,"%s: kbuf '%s'\n",__func__,kbuf);
     for(i=0; i < READER_CFG_MAX; i++) {
 	if(RC[i].name[0]) {
 		if(!strcmp(kbuf,RC[i].name)) {
-//			fprintf(stderr,"%s: Return '%s' %d\n",__func__,kbuf,i);
+//			fprintf(stderr,"%s: Return '%s' %d %s\n",__func__,kbuf,i,par ? *par : "<unset>");
 			return &RC[i];
 		}
 		continue;
@@ -499,10 +578,23 @@ pcre *re;
 }
 
 static int cfg_error = 0;
+static int set_cfg_error(const char *msg) {
+    if(msg) fprintf(stderr,"%s",msg);
+    cfg_error = 1;
+    return 0;
+}
+
 static int cfg_print(char *key,const char *val,void *data) {
 struct reader_config *rc;
 char *par;
+int dfl,alias,source;
 
+    dfl    = !strncmp(key,"default.",8);
+    source = !strncmp(key,"source.",7);
+    alias  = !strncmp(key,"alias.",6);
+#ifdef MAIN_TESTING
+    fprintf(stderr,"%s: %s='%s' dfl %d src %d alias %d\n",__func__,key,val,dfl,source,alias);
+#endif
     if(!strcmp(key,"PidFile")) {
 	PidFile = strdup(val);
 	return 0;
@@ -518,12 +610,14 @@ char *par;
 		return 0;
 	}
     }
-    if(!strncmp(key,"default.",8) || !strncmp(key,"source.",7)) {
+    if(alias || source || dfl) {
 	par = NULL;
 	rc = find_rc(key,&par,0);
 	if(rc) {
 		if(!par) return 0;
 		if(!strcmp(par,"file")) {
+			if(alias)
+			    return set_cfg_error(" Option 'alias' not alowed for 'default'.\n");
 			rc->file = strdup(val);
 			return 0;
 		}
@@ -564,8 +658,27 @@ char *par;
 			return 0;
 		}
 		if(!strcmp(par,"merge")) {
+			if(dfl)
+			    return set_cfg_error(" Option 'merge' not alowed for 'default'.\n");
+			if(alias)
+			    return set_cfg_error(" Option 'merge' not alowed for 'alias'.\n");
 			strncpy(rc->merge,val,sizeof(rc->merge)-1);
 			return 0;
+		}
+		if(!strncmp(par,"alias.",6)) {
+			struct reader_config *ra;
+			char a_par[64];
+			if(dfl)
+			    return set_cfg_error(" Option 'alias' not alowed for 'default'.\n");
+			if(alias)
+			    return set_cfg_error(" Option 'alias' not alowed for 'alias'.\n");
+			strncpy(a_par,par,sizeof(a_par)-1);
+			ra = find_rc(a_par,NULL,0);
+			if(ra) {
+				if(!ra->alias)
+				    ra->alias = rc;
+				return cfg_print(a_par,val,data);
+			}
 		}
 	}
 
@@ -595,11 +708,10 @@ int i;
 	}
 
 	for(i=0; i < READER_CFG_MAX && RC[i].name[0]; i++) {
-		if(!RC[i].file) {
-			stop_readers();
-			return 1;
-		}
-		if(RC[i].merge[0]) {
+		if(RC[i].alias) {
+			merge_config_alias(&RC[i]);
+		} else {
+		    if(RC[i].merge[0]) {
 			char *par = NULL,m_key[64];
 			strcpy(m_key,"source.");
 			strcat(m_key,RC[i].merge);
@@ -609,8 +721,16 @@ int i;
 				return 1;
 			}
 			merge_config(&RC[i],rc);
+		    }
+		    merge_config_default(&RC[i],&default_rc);
 		}
-		merge_config_default(&RC[i],&default_rc);
+
+		if(!RC[i].file) {
+			fprintf(stderr,"No file for %d\n",i);
+			stop_readers();
+			return 1;
+		}
+
 		RD[i] = create_reader(&RC[i]);
 		if(!RD[i]) {
 			stop_readers();
@@ -619,11 +739,17 @@ int i;
 		RD_count = i;
 	}
 	for(i=0; i < READER_CFG_MAX && RC[i].name[0]; i++) {
-		free(RC[i].file);
-		RC[i].file = NULL;
+		if(RC[i].file) {
+			free(RC[i].file);
+			RC[i].file = NULL;
+		}
 		if(RC[i].filter) {
 			free(RC[i].filter);
 			RC[i].filter = NULL;
+		}
+		if(RC[i].subst) {
+			free(RC[i].subst);
+			RC[i].subst = NULL;
 		}
 	}
 	pthread_mutex_init(&fc_mutex,NULL);
@@ -634,7 +760,7 @@ int check_readers(void) {
 int i;
 	for(i=0; i <= RD_count; i++) {
 		if(!RD[i]) return 1;
-		if(reader_get_data(RD[i])) return 1;
+		if(reader_get_data(RD[i],stderr)) return 1;
 		RD[i]->values_count = 0;
 	}
 	return 0;
@@ -643,17 +769,20 @@ int i;
 int run_readers(void) {
 int i;
 	for(i=0; i <= RD_count; i++) {
+		if(RD[i]->is_alias) continue;
 		if(run_reader_helper(RD[i])) return 1;
 	}
 	return 0;
 }
 
 int count_readers(void) {
-int i,n;
-	for(i=0,n=0; i <= RD_count; i++) {
+int i,n,r;
+	for(i=0,n=0,r=0; i <= RD_count; i++) {
+		if(RD[i]->is_alias) continue;
+		r++;
 		if(RD[i]->work) n++;
 	}
-	return n != RD_count+1;
+	return n != r;
 }
 
 

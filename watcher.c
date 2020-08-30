@@ -116,7 +116,7 @@ static void *log_init(struct fuse_conn_info *conn)
 	}
 	sleep(1);
 	if(count_readers()) {
-		fprintf(stderr,"run_readers error\n");
+		fprintf(stderr,"count_readers error\n");
 		kill(0,SIGTERM);
 	}
 	if(PidFile) {

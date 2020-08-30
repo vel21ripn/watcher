@@ -1,22 +1,24 @@
 
-#define READER_CFG_MAX 64
-#define READER_MAX_NUMBER 256
+#define READER_CFG_MAX 256
+#define READER_MAX_NUMBERS 256
 
 struct reader_helper {
 	pthread_t	th_cmd_helper;
 	pid_t		tid;
 	timer_t		timer_id;
 	volatile int	work;
-	int		line,word,p_int,delta,numbers;
+	int		line,word,p_int,delta,numbers,is_alias;
 	int		values_count,value_index,stage;
-	float		values[READER_MAX_NUMBER],value_delta,
+	float		values[READER_MAX_NUMBERS],value_delta,
 			value_last,value_min,value_max,value_sum;
+	pcre		*re,*s_re;
+	struct reader_helper *aliases;
+
 	char		fmt[16];
 	char 		name[32];
 	char		file[256];
 	char		result[64];
 	char 		filter[64],subst[64];
-	pcre		*re,*s_re;
 };
 
 
