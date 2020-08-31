@@ -14,9 +14,9 @@ struct reader_helper {
 	pcre		*re,*s_re;
 	struct reader_helper *aliases;
 
-	char		fmt[16];
 	char 		name[32];
 	char		file[256];
+	char		fmt[64];
 	char		result[64];
 	char 		filter[64],subst[64];
 };

@@ -9,7 +9,7 @@ default:
        interval: 5
        number: 5
        delta: 0
-       fmt: "%.0f"
+       fmt: "{last:%.0f} {avg:%.0f} {min:%.0f} {max:%.0f} {num:%d}"
 source:
    cputerm:
        file: /sys/class/hwmon/hwmon0/temp1_input
@@ -21,7 +21,7 @@ source:
        word: 8
        interval: 3
        number: 8
-       fmt: "%.1f"
+       fmt: "{max:%.0f}"
        alias:
          softirq0:
            filter: "^cpu0"

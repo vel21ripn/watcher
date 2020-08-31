@@ -19,6 +19,8 @@
 #include "reader.h"
 #include "yaml-parser.h"
 
+#define DEFAULT_FMT "{last:%g} {avg:%g} {min:%g} {max:%g} {num:%d}"
+
 static const int signum = SIGUSR2;
 
 char *PidFile = NULL;
@@ -49,7 +51,7 @@ struct reader_helper *RD[READER_CFG_MAX];
 int RD_count = 0;
 struct reader_config {
         int             line,word,p_int,delta,numbers;
-        char            name[32],merge[32],fmt[16];
+        char            name[32],merge[32],fmt[64];
         char            *file;
         char            *filter, *subst;
 	pcre		*re,*s_re;
@@ -61,15 +63,46 @@ static struct reader_config default_rc = { .name="default" },
 
 
 void reader_update_result(struct reader_helper *rr) {
-	char ofmt[128];
+	char ofmt[128],num_buf[16],*o,*s,*oe,*tn,*tf;
 	float avg = rr->value_last;
-	if(rr->values_count > 1) {
+	if(rr->values_count > 1) 
 		avg = rr->value_sum / rr->values_count;
+	o = rr->result;
+	oe = o + sizeof(rr->result)-2;
+	strncpy(ofmt,rr->fmt,sizeof(ofmt)-1);
+	s = ofmt;
+	while(*s && o < oe) {
+		if(*s != '{') { *o++ = *s++; continue; }
+		s++;
+		tf = strchr(s,'}');
+		if(!tf) goto bad_fmt;
+		*tf++ = '\0';
+		tn = strchr(s,':');
+		if(!tn) goto bad_fmt;
+		*tn++ = '\0';
+		num_buf[0] = '\0';
+		if(!strcmp(s,"last"))
+			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_last);
+		else if(!strcmp(s,"avg"))
+			snprintf(num_buf,sizeof(num_buf)-1,tn,avg);
+		else if(!strcmp(s,"min"))
+			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_min);
+		else if(!strcmp(s,"max"))
+			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_max);
+		else if(!strcmp(s,"num"))
+			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->values_count);
+		else goto bad_fmt;
+		s = num_buf;
+		while(*s && o < oe) *o++ = *s++;
+		s = tf;
 	}
-	snprintf(ofmt,sizeof(ofmt)-1,"%s %s %s %s %%d\n",rr->fmt,rr->fmt,rr->fmt,rr->fmt);
-	snprintf(rr->result,sizeof(rr->result)-1,ofmt,
-		rr->value_last,avg,rr->value_min,rr->value_max,rr->values_count);
+	*o++ = '\n';
+	*o = '\0';
 	rr->work = 1;
+	return;
+bad_fmt:
+	strncpy(rr->result,"bad_format\n",sizeof(rr->result)-1);
+	return;
 #if 0
 	for(i=0; i < rr->values_count; i++)
 		l += snprintf(&rr->result[l],sizeof(rr->result)-1-l," %g",rr->values[i]);
@@ -414,9 +447,9 @@ const char *re_err;
 	bzero((char *)rr,sizeof(*rr));
 	strncpy(rr->name,rc->name,sizeof(rr->name)-1);
 	strncpy(rr->file,rc->file,sizeof(rr->file)-1);
-	strncpy(rr->fmt, rc->fmt ? rc->fmt:"%g",sizeof(rr->fmt)-1);
-	if(rc->filter) strncpy(rr->filter,rc->filter,sizeof(rr->filter)-1);
-	if(rc->subst) strncpy(rr->subst,rc->subst,sizeof(rr->subst)-1);
+	strncpy(rr->fmt, rc->fmt ? rc->fmt : DEFAULT_FMT, sizeof(rr->fmt)-1);
+	if(rc->filter) strncpy(rr->filter, rc->filter, sizeof(rr->filter)-1);
+	if(rc->subst) strncpy(rr->subst, rc->subst, sizeof(rr->subst)-1);
 	rr->line = rc->line;
 	rr->word = rc->word;
 	rr->p_int = rc->p_int;
@@ -794,7 +827,7 @@ sigset_t s;
 int rsignal;
 
 	if(!argv[1]) abort();
-
+	debug_cmd_helper = 1;
 	if(parse_readers(argv[1])) exit(1);
 	if(run_readers()) exit(1);
 	sigemptyset(&s);
