@@ -21,6 +21,8 @@
 
 #define DEFAULT_FMT "{last:%g} {avg:%g} {min:%g} {max:%g} {num:%d}"
 
+#define FILE_VBUF_SIZE 4096
+
 static const int signum = SIGUSR2;
 
 char *PidFile = NULL;
@@ -29,8 +31,8 @@ char *fuse_mount_point = NULL;
 char *fuse_mount_options = NULL;
 
 struct file_str {
-	struct file_str *next;
-	char str[];
+    struct file_str *next;
+    char str[];
 };
 
 #define BUF_TIME_SIZE 32
@@ -41,10 +43,10 @@ static int debug_cmd_helper = 0;
 pthread_mutex_t fc_mutex;
 
 struct file_cache {
-	char		name[256];
-	time_t		rt;
-	int		lines;
-	struct file_str *data;
+    char        name[256];
+    time_t      rt;
+    int         lines;
+    struct file_str *data;
 } file_cache[READER_CFG_MAX];
 
 struct reader_helper *RD[READER_CFG_MAX];
@@ -54,260 +56,243 @@ struct reader_config {
         char            name[32],merge[32],fmt[64];
         char            *file;
         char            *filter, *subst;
-	pcre		*re,*s_re;
-	struct reader_config *alias;
+        pcre            *re,*s_re;
+        struct reader_config *alias;
 };
 
 static struct reader_config default_rc = { .name="default" },
-			    RC[READER_CFG_MAX];
+                RC[READER_CFG_MAX];
 
 
 void reader_update_result(struct reader_helper *rr) {
-	char ofmt[128],num_buf[16],*o,*s,*oe,*tn,*tf;
-	float avg = rr->value_last;
-	if(rr->values_count > 1) 
-		avg = rr->value_sum / rr->values_count;
-	o = rr->result;
-	oe = o + sizeof(rr->result)-2;
-	strncpy(ofmt,rr->fmt,sizeof(ofmt)-1);
-	s = ofmt;
-	while(*s && o < oe) {
-		if(*s != '{') { *o++ = *s++; continue; }
-		s++;
-		tf = strchr(s,'}');
-		if(!tf) goto bad_fmt;
-		*tf++ = '\0';
-		tn = strchr(s,':');
-		if(!tn) goto bad_fmt;
-		*tn++ = '\0';
-		num_buf[0] = '\0';
-		if(!strcmp(s,"last"))
-			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_last);
-		else if(!strcmp(s,"avg"))
-			snprintf(num_buf,sizeof(num_buf)-1,tn,avg);
-		else if(!strcmp(s,"min"))
-			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_min);
-		else if(!strcmp(s,"max"))
-			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_max);
-		else if(!strcmp(s,"num"))
-			snprintf(num_buf,sizeof(num_buf)-1,tn,rr->values_count);
-		else goto bad_fmt;
-		s = num_buf;
-		while(*s && o < oe) *o++ = *s++;
-		s = tf;
-	}
-	*o++ = '\n';
-	*o = '\0';
-	rr->work = 1;
-	return;
+    char ofmt[128],num_buf[16],*o,*s,*oe,*tn,*tf;
+    float avg = rr->value_last;
+
+    if(rr->values_count > 1) 
+        avg = rr->value_sum / rr->values_count;
+    o = rr->result;
+    oe = o + sizeof(rr->result)-2;
+    strncpy(ofmt,rr->fmt,sizeof(ofmt)-1);
+    s = ofmt;
+    while(*s && o < oe) {
+        if(*s != '{') { *o++ = *s++; continue; }
+        s++;
+        tf = strchr(s,'}');
+        if(!tf) goto bad_fmt;
+        *tf++ = '\0';
+        tn = strchr(s,':');
+        if(!tn) goto bad_fmt;
+        *tn++ = '\0';
+        num_buf[0] = '\0';
+        if(!strcmp(s,"last"))
+            snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_last);
+        else if(!strcmp(s,"avg"))
+            snprintf(num_buf,sizeof(num_buf)-1,tn,avg);
+        else if(!strcmp(s,"min"))
+            snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_min);
+        else if(!strcmp(s,"max"))
+            snprintf(num_buf,sizeof(num_buf)-1,tn,rr->value_max);
+        else if(!strcmp(s,"num"))
+            snprintf(num_buf,sizeof(num_buf)-1,tn,rr->values_count);
+        else goto bad_fmt;
+        s = num_buf;
+        while(*s && o < oe) *o++ = *s++;
+        s = tf;
+    }
+    *o++ = '\n';
+    *o = '\0';
+    rr->work = 1;
+    return;
 bad_fmt:
-	strncpy(rr->result,"bad_format\n",sizeof(rr->result)-1);
-	return;
-#if 0
-	for(i=0; i < rr->values_count; i++)
-		l += snprintf(&rr->result[l],sizeof(rr->result)-1-l," %g",rr->values[i]);
-#endif
+    strncpy(rr->result,"badfmt\n",sizeof(rr->result)-1);
+    return;
 }
 
 void free_reader_cache(struct file_cache *rc) {
 struct file_str *c,*n;
-for(n = NULL, c = rc->data; c; c = n) {
-	n = c->next;
-	free(c);
-}
-rc->data = NULL;
-rc->lines = 0;
+
+    for(n = NULL, c = rc->data; c; c = n) {
+        n = c->next;
+        free(c);
+    }
+    rc->data = NULL;
+    rc->lines = 0;
 }
 
 struct file_cache *reader_fetch_data(char *file,int p_int) {
 int i,l;
-FILE *fd;
-char line_buf[512],*str;
+FILE *fd = NULL;
+char line_buf[512],*str,*f_buf = NULL;
 struct file_str *c,*n;
 time_t tm = time(NULL);
-//	fprintf(stderr,"Fetch %s\n",file);
 
-	for(i=0; i < READER_CFG_MAX && file_cache[i].name[0]; i++) {
-		if(!strcmp(file_cache[i].name,file)) {
-			if(file_cache[i].rt > tm-p_int) {
-//				fprintf(stderr,"Cached %s from %d\n",file,i);
-				return &file_cache[i];
-			} else {
-//				fprintf(stderr,"Expired %s from %d\n",file,i);
-				break;
-			}
-		}
-	}
-	if(i >= READER_CFG_MAX) return NULL;
-//	fprintf(stderr,"Read %d %s\n",i,file);
-	strncpy(file_cache[i].name,file,sizeof(file_cache[i].name)-1);
-	free_reader_cache(&file_cache[i]);
+    for(i=0; i < READER_CFG_MAX && file_cache[i].name[0]; i++) {
+        if(!strcmp(file_cache[i].name,file)) {
+            if(file_cache[i].rt > tm-p_int) return &file_cache[i];
+            break;
+        }
+    }
+    if(i >= READER_CFG_MAX) return NULL;
+    strncpy(file_cache[i].name,file,sizeof(file_cache[i].name)-1);
+    free_reader_cache(&file_cache[i]);
 
-	fd = fopen(file,"r");
-	if(!fd) return NULL;
-	n = NULL;
-	c = NULL;
-	while((str = fgets(line_buf,sizeof(line_buf)-1,fd)) != NULL) {
-		l = strlen(str);
-		if(l > 0 && str[l-1] == '\n') {
-			l--;
-			str[l] = '\0';
-		}
-		c = malloc(sizeof(struct file_str)+l+2);
-		if(!c) return NULL; //FIXME
-		c->next = NULL;
-		strcpy(&c->str[0],str);
-		if(!file_cache[i].data) file_cache[i].data = c;
-		if(n) n->next = c;
-		n = c;
-		file_cache[i].lines++;
-//		fprintf(stderr,"Fetch %d:%d:%s\n",i,file_cache[i].lines,str);
-	}
-	fclose(fd);
-	file_cache[i].rt = time(NULL);
-	return &file_cache[i];
+    f_buf = malloc(FILE_VBUF_SIZE);
+    fd = fopen(file,"r");
+    if(!fd) {
+            if(f_buf) free(f_buf);
+            return NULL;
+    }
+    if(f_buf)
+        setvbuf(fd,f_buf,_IOFBF,FILE_VBUF_SIZE);
+    n = NULL;
+    c = NULL;
+    while((str = fgets(line_buf,sizeof(line_buf)-1,fd)) != NULL) {
+        l = strlen(str);
+        if(l > 0 && str[l-1] == '\n') {
+            l--;
+            str[l] = '\0';
+        }
+        c = malloc(sizeof(struct file_str)+l+2);
+        if(!c) break;
+        c->next = NULL;
+        strcpy(&c->str[0],str);
+        if(!file_cache[i].data) file_cache[i].data = c;
+        if(n) n->next = c;
+        n = c;
+        file_cache[i].lines++;
+//      fprintf(stderr,"Fetch %d:%d:%s\n",i,file_cache[i].lines,str);
+    }
+    fclose(fd);
+    if(f_buf) free(f_buf);
+    file_cache[i].rt = time(NULL);
+    return c ? &file_cache[i]:NULL;
 }
 
 
-static int _reader_get_data(struct reader_helper *rr) {
+static int _reader_get_data(struct reader_helper *rr,FILE *flog) {
 char line_buf[512],*saveptr1,*str,*wt;
+char tm_buf[BUF_TIME_SIZE];
 struct file_cache *fc;
 struct file_str *fstr;
 int line,word,next,i;
 float v;
-	rr->stage = 1;
-	if(!rr || !rr->file[0]) return 1;
 
-	rr->stage++;
-	pthread_mutex_lock(&fc_mutex);
-	fc = reader_fetch_data(rr->file,rr->p_int);
-	pthread_mutex_unlock(&fc_mutex);
-	if(!fc) return 1;
-	rr->stage++;
-	fstr = fc->data;
-	for(line=1; fstr && line <= rr->line; fstr = fstr->next ) {
-		strncpy(line_buf,fstr->str,sizeof(line_buf)-1);
-		str = line_buf;
-//		fprintf(stderr,"Line %d %s\n",rr->line,line_buf);
-		if(rr->re) {
-			int pcreExecRet;
-			int mvector[32];
-			pcreExecRet = pcre_exec(rr->re,NULL,str,strlen(str),
-					0,0,mvector,32);
-			if(pcreExecRet >= 0) {
-				line++;
-			}
-		} else {
-			line++;
-		}
-	}
-	if(!str) return 1;
+    rr->stage = 1;
+    do {
+        if(!rr || !rr->file[0]) break;
 
-	rr->stage++;
-	wt = strchr(line_buf,'\n');
-	if(wt) *wt = '\0';
-//	fprintf(stderr,"Line %d %s OK\n",rr->line,line_buf);
-	for(word=1,str = line_buf; word <= rr->word; word++,str = NULL) {
-		wt = strtok_r(str," \t,:;",&saveptr1);
-		if(!wt) break;
-	}
-	if(!wt) return 1;
+        rr->stage++;
+        pthread_mutex_lock(&fc_mutex);
+        fc = reader_fetch_data(rr->file,rr->p_int);
+        pthread_mutex_unlock(&fc_mutex);
+        if(!fc) break;
+        rr->stage++;
+        fstr = fc->data;
+        for(line=1; fstr && line <= rr->line; fstr = fstr->next ) {
+            strncpy(line_buf,fstr->str,sizeof(line_buf)-1);
+            str = line_buf;
+//          fprintf(stderr,"Line %d %s\n",rr->line,line_buf);
+            if(rr->re) {
+                int pcreExecRet;
+                int mvector[32];
+                pcreExecRet = pcre_exec(rr->re,NULL,str,strlen(str),
+                        0,0,mvector,32);
+                if(pcreExecRet >= 0) {
+                    line++;
+                }
+            } else {
+                line++;
+            }
+        }
+        if(!str) break;
 
-	rr->stage++;
-//	fprintf(stderr,"Word %d '%s' OK\n",rr->word,wt);
-	if(rr->s_re) {
-		int mvector[16];
-		int pcreExecRet = pcre_exec(rr->s_re,NULL,wt,strlen(wt), 0,0,mvector,16);
-//		fprintf(stderr,"pcre_exec %d %d %d OK\n",pcreExecRet,mvector[2],mvector[3]);
-		if(pcreExecRet >= 2) {
-			wt[mvector[3]] = '\0';
-			wt += mvector[2];
-//			fprintf(stderr,"subst '%s' OK\n",wt);
-		} else {
-			*wt = '\0';
-//			fprintf(stderr,"subst RE not match!\n");
-		}
-	}
-	v = strtof(wt,&saveptr1);
-	if(*saveptr1) return 1;
+        rr->stage++;
+        wt = strchr(line_buf,'\n');
+        if(wt) *wt = '\0';
+//      fprintf(stderr,"Line %d %s OK\n",rr->line,line_buf);
+        for(word=1,str = line_buf; word <= rr->word; word++,str = NULL) {
+            wt = strtok_r(str," \t,:;",&saveptr1);
+            if(!wt) break;
+        }
+        if(!wt) break;
 
-	rr->stage = 0;
-	if(rr->delta) {
-		float t = rr->values_count ? v - rr->value_delta : 0;
-		rr->value_delta = v;
-		v = t/rr->p_int;
-	}
-//	fprintf(stderr,"value %s %g OK\n",rr->name,v);
-	rr->value_last = v;
-	if(rr->values_count < rr->numbers) {
-		if(rr->values_count) rr->value_index++;
-		rr->values[rr->value_index] = v;
-		if( (rr->values_count && !rr->delta) || 
-		    (rr->values_count > 1 && rr->delta) ) {
-			if(v < rr->value_min) rr->value_min = v;
-			if(v > rr->value_max) rr->value_max = v;
-		} else {
-			rr->value_min = v;
-			rr->value_max = v;
-		}
-		rr->values_count++;
-		rr->value_sum += v;
-//	fprintf(stderr,"value0 %s %g min:%g max:%g\n",rr->name,v,rr->value_min,rr->value_max);
-		return 0;
-	}
-	next = (rr->value_index + 1) % rr->numbers;
-	rr->values[next] = v;
-	rr->value_index = next;
-	rr->value_min = v;
-	rr->value_max = v;
-	rr->value_sum = 0.0;
-	for(i=0; i < rr->numbers; i++) {
-		rr->value_sum += rr->values[i];
-		if(rr->values[i] < rr->value_min) rr->value_min = rr->values[i];
-		if(rr->values[i] > rr->value_max) rr->value_max = rr->values[i];
-	}
-//	fprintf(stderr,"value1 %s %g min:%g max:%g\n",rr->name,v,rr->value_min,rr->value_max);
-	return 0;
+        rr->stage++;
+//      fprintf(stderr,"Word %d '%s' OK\n",rr->word,wt);
+        if(rr->s_re) {
+            int mvector[16];
+            int pcreExecRet = pcre_exec(rr->s_re,NULL,wt,strlen(wt), 0,0,mvector,16);
+//          fprintf(stderr,"pcre_exec %d %d %d OK\n",pcreExecRet,mvector[2],mvector[3]);
+            if(pcreExecRet >= 2) {
+                wt[mvector[3]] = '\0';
+                wt += mvector[2];
+            } else {
+                *wt = '\0';
+            }
+        }
+        v = strtof(wt,&saveptr1);
+        if(*saveptr1) break;
+
+        rr->stage = 0;
+        if(rr->delta) {
+            float t = rr->values_count ? v - rr->value_delta : 0;
+            rr->value_delta = v;
+            v = t/rr->p_int;
+        }
+//      fprintf(stderr,"value %s %g OK\n",rr->name,v);
+        rr->value_last = v;
+        if(rr->values_count < rr->numbers) {
+            if(rr->values_count) rr->value_index++;
+            rr->values[rr->value_index] = v;
+            if( (rr->values_count && !rr->delta) || 
+                (rr->values_count > 1 && rr->delta) ) {
+                if(v < rr->value_min) rr->value_min = v;
+                if(v > rr->value_max) rr->value_max = v;
+            } else {
+                rr->value_min = v;
+                rr->value_max = v;
+            }
+            rr->values_count++;
+            rr->value_sum += v;
+//          fprintf(stderr,"value0 %s %g min:%g max:%g\n",rr->name,v,rr->value_min,rr->value_max);
+        } else {
+            next = (rr->value_index + 1) % rr->numbers;
+            rr->values[next] = v;
+            rr->value_index = next;
+            rr->value_min = v;
+            rr->value_max = v;
+            rr->value_sum = 0.0;
+            for(i=0; i < rr->numbers; i++) {
+                rr->value_sum += rr->values[i];
+                if(rr->values[i] < rr->value_min) rr->value_min = rr->values[i];
+                if(rr->values[i] > rr->value_max) rr->value_max = rr->values[i];
+            }
+//          fprintf(stderr,"value1 %s %g min:%g max:%g\n",rr->name,v,rr->value_min,rr->value_max);
+        }
+        reader_update_result(rr);
+        if(debug_cmd_helper) {
+            fprintf(flog,"%s %s %s result %s",
+                getctm(tm_buf),__func__,rr->name,rr->result);
+            fflush(flog);
+        }
+        return 0;
+    } while(0);
+    strcpy(rr->result,"0 0 0 0 0\n");
+    fprintf(flog,"%s %s %s reader_get_data error stage %d\n",
+        getctm(tm_buf),__func__,rr->name,rr->stage);
+    fflush(flog);
+    return 1;
 }
 
 int reader_get_data(struct reader_helper *rr,FILE *flog) {
-char tm_buf[BUF_TIME_SIZE];
 
-	int r = _reader_get_data(rr);
-	if(r) {
-		strcpy(rr->result,"0 0 0 0 0\n");
-		fprintf(flog,"%s %s %s reader_get_data error stage %d\n",
-			getctm(tm_buf),__func__,rr->name,rr->stage);
-		fflush(flog);
-	} else {
-		reader_update_result(rr);
-		if(debug_cmd_helper) {
-			fprintf(flog,"%s %s %s result %s",
-				getctm(tm_buf),__func__,rr->name,rr->result);
-			fflush(flog);
-		}
-	}
-	if(!rr->is_alias && rr->aliases) {
-		struct reader_helper *rra;
-		for(rra = rr->aliases; rra; rra = rra->aliases) {
-			int ra = _reader_get_data(rra);
-			if(ra) {
-				strcpy(rra->result,"0 0 0 0 0\n");
-				fprintf(flog,"%s %s %s reader_get_data error stage %d\n",
-					getctm(tm_buf),__func__,rra->name,rra->stage);
-				fflush(flog);
-				r = ra;
-			} else {
-				reader_update_result(rra);
-				if(debug_cmd_helper) {
-					fprintf(flog,"%s %s %s result %s",
-						getctm(tm_buf),__func__,rra->name,rra->result);
-					fflush(flog);
-				}
-			}
-		}
-	}
-	return r;
+    int r = _reader_get_data(rr, flog);
+    if(!rr->is_alias && rr->aliases) {
+        struct reader_helper *rra;
+        for(rra = rr->aliases; rra; rra = rra->aliases) {
+            if(_reader_get_data(rra,flog)) r |= 1;
+        }
+    }
+    return r;
 }
 
 long int delta_tv(struct timeval *tv1,struct timeval *tv0) {
@@ -348,86 +333,86 @@ struct itimerspec itv;
 int tfd = -1;
 u_int64_t exptm;
 
-rr->tid = syscall(__NR_gettid);
+    rr->tid = syscall(__NR_gettid);
 
-sigemptyset(&s);
-sigaddset(&s,signum);
-sigprocmask(SIG_UNBLOCK, &s, NULL);
-signal(signum,my_sig_h);
-siginterrupt(signum,1);
+    sigemptyset(&s);
+    sigaddset(&s,signum);
+    sigprocmask(SIG_UNBLOCK, &s, NULL);
+    signal(signum,my_sig_h);
+    siginterrupt(signum,1);
 
-flog = stderr;
+    flog = stderr;
 
-if (clock_gettime(CLOCK_REALTIME, &now) == -1) {
-	fprintf(flog,"%s %s %s clock_gettime %s\n",
-		getctm(tm_buf),__func__,name, strerror(errno));
-	fflush(flog);
-	rr->work = 0;
-	return NULL;
-}
+    if (clock_gettime(CLOCK_REALTIME, &now) == -1) {
+        fprintf(flog,"%s %s %s clock_gettime %s\n",
+            getctm(tm_buf),__func__,name, strerror(errno));
+        fflush(flog);
+        rr->work = 0;
+        return NULL;
+    }
 
-tfd = timerfd_create(CLOCK_REALTIME, 0);
-if(tfd < 0) {
-	fprintf(flog,"%s %s %s create_timerfd %s\n",
-		getctm(tm_buf),__func__,name, strerror(errno));
-	fflush(flog);
-	rr->work = 0;
-	return NULL;
-}
-itv.it_value.tv_sec = now.tv_sec + rr->p_int;
-itv.it_value.tv_nsec = now.tv_nsec;
-itv.it_interval.tv_sec = rr->p_int;
-itv.it_interval.tv_nsec = 0;
-if (timerfd_settime(tfd, TFD_TIMER_ABSTIME, &itv, NULL) == -1) {
-	fprintf(flog,"%s %s %s timerfd_settime %s\n",
-		getctm(tm_buf),__func__,name, strerror(errno));
-	fflush(flog);
-	rr->work = 0;
-	return NULL;
-}
+    tfd = timerfd_create(CLOCK_REALTIME, 0);
+    if(tfd < 0) {
+        fprintf(flog,"%s %s %s create_timerfd %s\n",
+            getctm(tm_buf),__func__,name, strerror(errno));
+        fflush(flog);
+        rr->work = 0;
+        return NULL;
+    }
+    itv.it_value.tv_sec = now.tv_sec + rr->p_int;
+    itv.it_value.tv_nsec = now.tv_nsec;
+    itv.it_interval.tv_sec = rr->p_int;
+    itv.it_interval.tv_nsec = 0;
+    if (timerfd_settime(tfd, TFD_TIMER_ABSTIME, &itv, NULL) == -1) {
+        fprintf(flog,"%s %s %s timerfd_settime %s\n",
+            getctm(tm_buf),__func__,name, strerror(errno));
+        fflush(flog);
+        rr->work = 0;
+        return NULL;
+    }
 
-if(debug_cmd_helper) {
-	fprintf(flog,"%s %s %s %d/%u/%lu\n",getctm(tm_buf),__func__,name,
-		getpid(), rr->tid, pthread_self());
-	fflush(flog);
-}
+    if(debug_cmd_helper) {
+        fprintf(flog,"%s %s %s %d/%u/%lu\n",getctm(tm_buf),__func__,name,
+            getpid(), rr->tid, pthread_self());
+        fflush(flog);
+    }
 
-do {
-	reader_get_data(rr,flog);
+    do {
+        reader_get_data(rr,flog);
 
-	sigemptyset(&sw);
-	sigaddset(&sw,signum);
-	sigpending (&sw);
-	if(sigismember (&sw, signum)) break;
+        sigemptyset(&sw);
+        sigaddset(&sw,signum);
+        sigpending (&sw);
+        if(sigismember (&sw, signum)) break;
 
-	do {
-		t_start = read(tfd, &exptm, sizeof(u_int64_t));
-	} while(rr->work && t_start < 0 && errno == EINTR);
-	if(!rr->work) break;
+        do {
+            t_start = read(tfd, &exptm, sizeof(u_int64_t));
+        } while(rr->work && t_start < 0 && errno == EINTR);
+        if(!rr->work) break;
 
-	if(t_start != sizeof(u_int64_t)) break;
-	count++;
-} while(rr->work);
+        if(t_start != sizeof(u_int64_t)) break;
+        count++;
+    } while(rr->work);
 
-if(debug_cmd_helper) {
-	fprintf(flog,"%s %s %s %d/%lu exit\n",
-		getctm(tm_buf),__func__,name,getpid(),pthread_self());
-	fflush(flog);
-}
-if(tfd >= 0) close(tfd);
-if(flog != stderr) fclose(flog);
-rr->work = 0;
-return NULL;
+    if(debug_cmd_helper) {
+        fprintf(flog,"%s %s %s %d/%lu exit\n",
+            getctm(tm_buf),__func__,name,getpid(),pthread_self());
+        fflush(flog);
+    }
+    if(tfd >= 0) close(tfd);
+    if(flog != stderr) fclose(flog);
+    rr->work = 0;
+    return NULL;
 }
 
 void delete_reader(struct reader_helper *rr) {
-	if(rr->work && rr->tid && rr->th_cmd_helper) {
-		long int *rv;
-		rr->work = 0;
-		syscall(__NR_tkill,rr->tid,signum);
-		pthread_join(rr->th_cmd_helper,(void **)&rv);
-	}
-	free(rr);
+    if(rr->work && rr->tid && rr->th_cmd_helper) {
+        long int *rv;
+        rr->work = 0;
+        syscall(__NR_tkill,rr->tid,signum);
+        pthread_join(rr->th_cmd_helper,(void **)&rv);
+    }
+    free(rr);
 }
 
 struct reader_helper *create_reader(struct reader_config *rc) {
@@ -437,65 +422,65 @@ int i;
 int err_pos;
 const char *re_err;
 
-	if(rc->numbers > READER_CFG_MAX) return NULL;
-	if(!rc->p_int  || rc->p_int > 600) return NULL;
+    if(rc->numbers > READER_CFG_MAX) return NULL;
+    if(!rc->p_int  || rc->p_int > 600) return NULL;
 
-	rr = calloc(1,sizeof(*rr));
+    rr = calloc(1,sizeof(*rr));
 
-	if(!rr) return rr;
+    if(!rr) return rr;
 
-	bzero((char *)rr,sizeof(*rr));
-	strncpy(rr->name,rc->name,sizeof(rr->name)-1);
-	strncpy(rr->file,rc->file,sizeof(rr->file)-1);
-	strncpy(rr->fmt, rc->fmt ? rc->fmt : DEFAULT_FMT, sizeof(rr->fmt)-1);
-	if(rc->filter) strncpy(rr->filter, rc->filter, sizeof(rr->filter)-1);
-	if(rc->subst) strncpy(rr->subst, rc->subst, sizeof(rr->subst)-1);
-	rr->line = rc->line;
-	rr->word = rc->word;
-	rr->p_int = rc->p_int;
-	rr->delta = rc->delta != 0;
-	rr->numbers = rc->numbers;
-	for(i = 0; i < READER_CFG_MAX; i++) rr->values[i] = 0.0;
-	rr->value_last = rr->value_min = rr->value_max = 0.0;
-	strcpy(rr->result,"none\n");
-	if(rc->filter)
-		rr->re = pcre_compile(rr->filter,0,&re_err,&err_pos,NULL);
-	if(rc->subst)
-		rr->s_re = pcre_compile(rr->subst,0,&re_err,&err_pos,NULL);
-	if(rc->alias) {
-	    struct reader_helper *rs = NULL;
-	    for(i=0; i <= RD_count; i++)
-		if(!strcmp(RD[i]->name,rc->alias->name)) { rs = RD[i]; break; }
-	    if(!rs) {
-		fprintf(stderr,"Unknown source rr->name\n");
-		return NULL;
-	    }
-	    rr->is_alias = 1;
-	    while(rs->aliases) rs = rs->aliases;
-	    rs->aliases = rr;
-	}
+    bzero((char *)rr,sizeof(*rr));
+    strncpy(rr->name,rc->name,sizeof(rr->name)-1);
+    strncpy(rr->file,rc->file,sizeof(rr->file)-1);
+    strncpy(rr->fmt, rc->fmt ? rc->fmt : DEFAULT_FMT, sizeof(rr->fmt)-1);
+    if(rc->filter) strncpy(rr->filter, rc->filter, sizeof(rr->filter)-1);
+    if(rc->subst) strncpy(rr->subst, rc->subst, sizeof(rr->subst)-1);
+    rr->line = rc->line;
+    rr->word = rc->word;
+    rr->p_int = rc->p_int;
+    rr->delta = rc->delta != 0;
+    rr->numbers = rc->numbers;
+    for(i = 0; i < READER_CFG_MAX; i++) rr->values[i] = 0.0;
+    rr->value_last = rr->value_min = rr->value_max = 0.0;
+    strcpy(rr->result,"none\n");
+    if(rc->filter)
+        rr->re = pcre_compile(rr->filter,0,&re_err,&err_pos,NULL);
+    if(rc->subst)
+        rr->s_re = pcre_compile(rr->subst,0,&re_err,&err_pos,NULL);
+    if(rc->alias) {
+        struct reader_helper *rs = NULL;
+        for(i=0; i <= RD_count; i++)
+        if(!strcmp(RD[i]->name,rc->alias->name)) { rs = RD[i]; break; }
+        if(!rs) {
+        fprintf(stderr,"Unknown source rr->name\n");
+        return NULL;
+        }
+        rr->is_alias = 1;
+        while(rs->aliases) rs = rs->aliases;
+        rs->aliases = rr;
+    }
 #ifdef MAIN_TESTING
-	fprintf(stderr,"Create %s '%s'",rr->is_alias ? "alias":"source",rr->name);
-	if(rr->is_alias)
-		fprintf(stderr," from %s\n",rc->alias->name);
-	   else
-		fprintf(stderr," from %s\n",rr->file);
-	fprintf(stderr," Line %d, Word %d, interval %d, %s, n_val %d\n",
-			rr->line,rr->word,rr->p_int, rr->delta ? "counter":"abs", rr->numbers);
-	fprintf(stderr," fmt '%s', filter '%s' subst '%s'\n",
-			rr->fmt,rr->filter,rr->subst);
+    fprintf(stderr,"Create %s '%s'",rr->is_alias ? "alias":"source",rr->name);
+    if(rr->is_alias)
+        fprintf(stderr," from %s\n",rc->alias->name);
+       else
+        fprintf(stderr," from %s\n",rr->file);
+    fprintf(stderr," Line %d, Word %d, interval %d, %s, n_val %d\n",
+            rr->line,rr->word,rr->p_int, rr->delta ? "counter":"abs", rr->numbers);
+    fprintf(stderr," fmt '%s', filter '%s' subst '%s'\n",
+            rr->fmt,rr->filter,rr->subst);
 #endif
-	return rr;
+    return rr;
 }
 
 int run_reader_helper(struct reader_helper *rr) {
-	rr->work = 1;
-	if(pthread_create(&rr->th_cmd_helper,NULL,cmd_helper,(void *)rr)) {
-		free(rr);
-		return 1;
-	}
-	// pthread_detach(rr->th_cmd_helper);
-	return 0;
+    rr->work = 1;
+    if(pthread_create(&rr->th_cmd_helper,NULL,cmd_helper,(void *)rr)) {
+        free(rr);
+        return 1;
+    }
+    // pthread_detach(rr->th_cmd_helper);
+    return 0;
 }
 
 
@@ -562,17 +547,17 @@ struct reader_config *find_rc(const char *key,char **par,int no_add) {
 #endif
 
     if(!strncmp(key,"default.",8)) {
-	strncpy(kbuf,key+8,sizeof(kbuf)-1);
-	if(par) *par = kbuf;
-//	fprintf(stderr,"Return default %s\n",kbuf);
-	return &default_rc;
+    strncpy(kbuf,key+8,sizeof(kbuf)-1);
+    if(par) *par = kbuf;
+//  fprintf(stderr,"Return default %s\n",kbuf);
+    return &default_rc;
     }
     if(!strncmp(key,"source.",7)) {
     // source.name.par
-	strncpy(kbuf,key+7,sizeof(kbuf)-1);
+    strncpy(kbuf,key+7,sizeof(kbuf)-1);
     } else if(!strncmp(key,"alias.",6)) {
     // alias.name.par
-	strncpy(kbuf,key+6,sizeof(kbuf)-1);
+    strncpy(kbuf,key+6,sizeof(kbuf)-1);
     } else return NULL;
 
     c = strchr(kbuf,'.');
@@ -580,17 +565,17 @@ struct reader_config *find_rc(const char *key,char **par,int no_add) {
     if(c) *c = '\0';
 //    fprintf(stderr,"%s: kbuf '%s'\n",__func__,kbuf);
     for(i=0; i < READER_CFG_MAX; i++) {
-	if(RC[i].name[0]) {
-		if(!strcmp(kbuf,RC[i].name)) {
-//			fprintf(stderr,"%s: Return '%s' %d %s\n",__func__,kbuf,i,par ? *par : "<unset>");
-			return &RC[i];
-		}
-		continue;
-	}
-	if(no_add) return NULL;
-//	fprintf(stderr,"%s: Add '%s' %d\n",__func__,kbuf,i);
-	strncpy(RC[i].name,kbuf,sizeof(RC[i].name));
-	return &RC[i];
+    if(RC[i].name[0]) {
+        if(!strcmp(kbuf,RC[i].name)) {
+//          fprintf(stderr,"%s: Return '%s' %d %s\n",__func__,kbuf,i,par ? *par : "<unset>");
+            return &RC[i];
+        }
+        continue;
+    }
+    if(no_add) return NULL;
+//  fprintf(stderr,"%s: Add '%s' %d\n",__func__,kbuf,i);
+    strncpy(RC[i].name,kbuf,sizeof(RC[i].name));
+    return &RC[i];
     }
     return NULL;
 }
@@ -599,15 +584,15 @@ static int cfg_valid_re(const char *str_re) {
 const char* error;
 int erroroffset;
 pcre *re;
-	if(!str_re) return 0;
-//	fprintf(stderr,"%s: %s\n",__func__,str_re);
-	re = pcre_compile(str_re,0,&error,&erroroffset, NULL);
-	if(re == NULL) {
-		fprintf(stderr,"Bad re: %s pos %d\n",error,erroroffset);
-		return 0;
-	}
-	pcre_free(re);
-	return 1;
+    if(!str_re) return 0;
+//  fprintf(stderr,"%s: %s\n",__func__,str_re);
+    re = pcre_compile(str_re,0,&error,&erroroffset, NULL);
+    if(re == NULL) {
+        fprintf(stderr,"Bad re: %s pos %d\n",error,erroroffset);
+        return 0;
+    }
+    pcre_free(re);
+    return 1;
 }
 
 static int cfg_error = 0;
@@ -629,91 +614,91 @@ int dfl,alias,source;
     fprintf(stderr,"%s: %s='%s' dfl %d src %d alias %d\n",__func__,key,val,dfl,source,alias);
 #endif
     if(!strcmp(key,"PidFile")) {
-	PidFile = strdup(val);
-	return 0;
+    PidFile = strdup(val);
+    return 0;
     }
     if(!strncmp(key,"fuse.",5)) {
-	par = key+5;
-	if(!strcmp(par,"options")) {
-		fuse_mount_options = strdup(val);
-		return 0;
-	}
-	if(!strcmp(par,"mountpoint")) {
-		fuse_mount_point = strdup(val);
-		return 0;
-	}
+    par = key+5;
+    if(!strcmp(par,"options")) {
+        fuse_mount_options = strdup(val);
+        return 0;
+    }
+    if(!strcmp(par,"mountpoint")) {
+        fuse_mount_point = strdup(val);
+        return 0;
+    }
     }
     if(alias || source || dfl) {
-	par = NULL;
-	rc = find_rc(key,&par,0);
-	if(rc) {
-		if(!par) return 0;
-		if(!strcmp(par,"file")) {
-			if(alias)
-			    return set_cfg_error(" Option 'alias' not alowed for 'default'.\n");
-			rc->file = strdup(val);
-			return 0;
-		}
-		if(!strcmp(par,"line")) {
-			rc->line = strtol(val,NULL,10);
-			return 0;
-		}
-		if(!strcmp(par,"word")) {
-			rc->word = strtol(val,NULL,10);
-			return 0;
-		}
-		if(!strcmp(par,"interval")) {
-			rc->p_int = strtol(val,NULL,10);
-			return 0;
-		}
-		if(!strcmp(par,"delta")) {
-			rc->delta = strtol(val,NULL,10);
-			return 0;
-		}
-		if(!strcmp(par,"number")) {
-			rc->numbers = strtol(val,NULL,10);
-			return 0;
-		}
-		if(!strcmp(par,"filter")) {
-			if(!cfg_valid_re(val)) { cfg_error = 1; return 0; }
-			rc->filter = strdup(val);
-			if(!rc->filter) abort();
-			return 0;
-		}
-		if(!strcmp(par,"subst")) {
-			if(!cfg_valid_re(val)) { cfg_error = 1; return 0; }
-			rc->subst = strdup(val);
-			if(!rc->subst) abort();
-			return 0;
-		}
-		if(!strcmp(par,"fmt")) {
-			strncpy(rc->fmt,val,sizeof(rc->fmt)-1);
-			return 0;
-		}
-		if(!strcmp(par,"merge")) {
-			if(dfl)
-			    return set_cfg_error(" Option 'merge' not alowed for 'default'.\n");
-			if(alias)
-			    return set_cfg_error(" Option 'merge' not alowed for 'alias'.\n");
-			strncpy(rc->merge,val,sizeof(rc->merge)-1);
-			return 0;
-		}
-		if(!strncmp(par,"alias.",6)) {
-			struct reader_config *ra;
-			char a_par[64];
-			if(dfl)
-			    return set_cfg_error(" Option 'alias' not alowed for 'default'.\n");
-			if(alias)
-			    return set_cfg_error(" Option 'alias' not alowed for 'alias'.\n");
-			strncpy(a_par,par,sizeof(a_par)-1);
-			ra = find_rc(a_par,NULL,0);
-			if(ra) {
-				if(!ra->alias)
-				    ra->alias = rc;
-				return cfg_print(a_par,val,data);
-			}
-		}
-	}
+    par = NULL;
+    rc = find_rc(key,&par,0);
+    if(rc) {
+        if(!par) return 0;
+        if(!strcmp(par,"file")) {
+            if(alias)
+                return set_cfg_error(" Option 'alias' not alowed for 'default'.\n");
+            rc->file = strdup(val);
+            return 0;
+        }
+        if(!strcmp(par,"line")) {
+            rc->line = strtol(val,NULL,10);
+            return 0;
+        }
+        if(!strcmp(par,"word")) {
+            rc->word = strtol(val,NULL,10);
+            return 0;
+        }
+        if(!strcmp(par,"interval")) {
+            rc->p_int = strtol(val,NULL,10);
+            return 0;
+        }
+        if(!strcmp(par,"delta")) {
+            rc->delta = strtol(val,NULL,10);
+            return 0;
+        }
+        if(!strcmp(par,"number")) {
+            rc->numbers = strtol(val,NULL,10);
+            return 0;
+        }
+        if(!strcmp(par,"filter")) {
+            if(!cfg_valid_re(val)) { cfg_error = 1; return 0; }
+            rc->filter = strdup(val);
+            if(!rc->filter) abort();
+            return 0;
+        }
+        if(!strcmp(par,"subst")) {
+            if(!cfg_valid_re(val)) { cfg_error = 1; return 0; }
+            rc->subst = strdup(val);
+            if(!rc->subst) abort();
+            return 0;
+        }
+        if(!strcmp(par,"fmt")) {
+            strncpy(rc->fmt,val,sizeof(rc->fmt)-1);
+            return 0;
+        }
+        if(!strcmp(par,"merge")) {
+            if(dfl)
+                return set_cfg_error(" Option 'merge' not alowed for 'default'.\n");
+            if(alias)
+                return set_cfg_error(" Option 'merge' not alowed for 'alias'.\n");
+            strncpy(rc->merge,val,sizeof(rc->merge)-1);
+            return 0;
+        }
+        if(!strncmp(par,"alias.",6)) {
+            struct reader_config *ra;
+            char a_par[64];
+            if(dfl)
+                return set_cfg_error(" Option 'alias' not alowed for 'default'.\n");
+            if(alias)
+                return set_cfg_error(" Option 'alias' not alowed for 'alias'.\n");
+            strncpy(a_par,par,sizeof(a_par)-1);
+            ra = find_rc(a_par,NULL,0);
+            if(ra) {
+                if(!ra->alias)
+                    ra->alias = rc;
+                return cfg_print(a_par,val,data);
+            }
+        }
+    }
 
     }
     fprintf(stderr, " Unknown option %s=%s\n",key,val);
@@ -724,98 +709,98 @@ int dfl,alias,source;
 void stop_readers(void)
 {
 int i;
-	for(i=0; i < READER_CFG_MAX; i++) {
-		if(RD[i]) delete_reader(RD[i]);
-	}
+    for(i=0; i < READER_CFG_MAX; i++) {
+        if(RD[i]) delete_reader(RD[i]);
+    }
 }
 
 int parse_readers(char *cfg)
 {
 char buf[256];
 int i;
-	if(!cfg) return 1;
+    if(!cfg) return 1;
 
-	if(!yaml_config_pairs(cfg,buf,sizeof(buf),cfg_print,NULL) || cfg_error) {
-//		fprintf(stderr,"cfg error %d\n",cfg_error);
-		return 1;
-	}
+    if(!yaml_config_pairs(cfg,buf,sizeof(buf),cfg_print,NULL) || cfg_error) {
+//      fprintf(stderr,"cfg error %d\n",cfg_error);
+        return 1;
+    }
 
-	for(i=0; i < READER_CFG_MAX && RC[i].name[0]; i++) {
-		if(RC[i].alias) {
-			merge_config_alias(&RC[i]);
-		} else {
-		    if(RC[i].merge[0]) {
-			char *par = NULL,m_key[64];
-			strcpy(m_key,"source.");
-			strcat(m_key,RC[i].merge);
-			struct reader_config *rc = find_rc(m_key,&par,1);
-			if(!rc) {
-				fprintf(stderr,"Name '%s' not found\n",RC[i].merge);
-				return 1;
-			}
-			merge_config(&RC[i],rc);
-		    }
-		    merge_config_default(&RC[i],&default_rc);
-		}
+    for(i=0; i < READER_CFG_MAX && RC[i].name[0]; i++) {
+        if(RC[i].alias) {
+            merge_config_alias(&RC[i]);
+        } else {
+            if(RC[i].merge[0]) {
+            char *par = NULL,m_key[64];
+            strcpy(m_key,"source.");
+            strcat(m_key,RC[i].merge);
+            struct reader_config *rc = find_rc(m_key,&par,1);
+            if(!rc) {
+                fprintf(stderr,"Name '%s' not found\n",RC[i].merge);
+                return 1;
+            }
+            merge_config(&RC[i],rc);
+            }
+            merge_config_default(&RC[i],&default_rc);
+        }
 
-		if(!RC[i].file) {
-			fprintf(stderr,"No file for %d\n",i);
-			stop_readers();
-			return 1;
-		}
+        if(!RC[i].file) {
+            fprintf(stderr,"No file for %d\n",i);
+            stop_readers();
+            return 1;
+        }
 
-		RD[i] = create_reader(&RC[i]);
-		if(!RD[i]) {
-			stop_readers();
-			return 1;
-		}
-		RD_count = i;
-	}
-	for(i=0; i < READER_CFG_MAX && RC[i].name[0]; i++) {
-		if(RC[i].file) {
-			free(RC[i].file);
-			RC[i].file = NULL;
-		}
-		if(RC[i].filter) {
-			free(RC[i].filter);
-			RC[i].filter = NULL;
-		}
-		if(RC[i].subst) {
-			free(RC[i].subst);
-			RC[i].subst = NULL;
-		}
-	}
-	pthread_mutex_init(&fc_mutex,NULL);
-	return 0;
+        RD[i] = create_reader(&RC[i]);
+        if(!RD[i]) {
+            stop_readers();
+            return 1;
+        }
+        RD_count = i;
+    }
+    for(i=0; i < READER_CFG_MAX && RC[i].name[0]; i++) {
+        if(RC[i].file) {
+            free(RC[i].file);
+            RC[i].file = NULL;
+        }
+        if(RC[i].filter) {
+            free(RC[i].filter);
+            RC[i].filter = NULL;
+        }
+        if(RC[i].subst) {
+            free(RC[i].subst);
+            RC[i].subst = NULL;
+        }
+    }
+    pthread_mutex_init(&fc_mutex,NULL);
+    return 0;
 }
 
 int check_readers(void) {
 int i;
-	for(i=0; i <= RD_count; i++) {
-		if(!RD[i]) return 1;
-		if(reader_get_data(RD[i],stderr)) return 1;
-		RD[i]->values_count = 0;
-	}
-	return 0;
+    for(i=0; i <= RD_count; i++) {
+        if(!RD[i]) return 1;
+        if(reader_get_data(RD[i],stderr)) return 1;
+        RD[i]->values_count = 0;
+    }
+    return 0;
 }
 
 int run_readers(void) {
 int i;
-	for(i=0; i <= RD_count; i++) {
-		if(RD[i]->is_alias) continue;
-		if(run_reader_helper(RD[i])) return 1;
-	}
-	return 0;
+    for(i=0; i <= RD_count; i++) {
+        if(RD[i]->is_alias) continue;
+        if(run_reader_helper(RD[i])) return 1;
+    }
+    return 0;
 }
 
 int count_readers(void) {
 int i,n,r;
-	for(i=0,n=0,r=0; i <= RD_count; i++) {
-		if(RD[i]->is_alias) continue;
-		r++;
-		if(RD[i]->work) n++;
-	}
-	return n != r;
+    for(i=0,n=0,r=0; i <= RD_count; i++) {
+        if(RD[i]->is_alias) continue;
+        r++;
+        if(RD[i]->work) n++;
+    }
+    return n != r;
 }
 
 
@@ -826,18 +811,23 @@ int main(int argc,char **argv) {
 sigset_t s;
 int rsignal;
 
-	if(!argv[1]) abort();
-	debug_cmd_helper = 1;
-	if(parse_readers(argv[1])) exit(1);
-	if(run_readers()) exit(1);
-	sigemptyset(&s);
-	sigaddset(&s,SIGINT);
-	sigprocmask(SIG_BLOCK, &s, NULL);
-	siginterrupt(SIGINT,1);
-	sigwait(&s,&rsignal);
-	
-	stop_readers();
-	exit(0);
+    if(!argv[1]) abort();
+    debug_cmd_helper = 1;
+    if(parse_readers(argv[1])) exit(1);
+    if(run_readers()) exit(1);
+    sigemptyset(&s);
+    sigaddset(&s,SIGINT);
+    sigprocmask(SIG_BLOCK, &s, NULL);
+    siginterrupt(SIGINT,1);
+    sigwait(&s,&rsignal);
+    
+    stop_readers();
+    exit(0);
 }
 #endif
+
+/*
+ * vim: set tabstop=4:shiftwidth=4:sts=4:expandtab:foldmethod=marker:foldmarker={{{{,}}}}:
+ * retab!
+ */
 

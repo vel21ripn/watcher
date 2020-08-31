@@ -16,21 +16,21 @@ static int is_str(char *s) {
 }
 
 static void print_path(char **path,int last,char *buf,size_t buflen) {
-	int i,l;
+    int i,l;
 
-	for(i=1,l=0; i < last; i++) {
-		if(path[i] != P_KEY) continue;
-		if(i+1 > last) break;
-		if(l && l < buflen-2) 
-				buf[l++]='.';
-		if(is_str(path[i+1])) {
-			int sl = strlen(path[i+1]);
-			if(sl < buflen - l - 1) {
-					strcpy(&buf[l],path[i+1]);
-					l += sl;
-			}
-			i++;
-		}
+    for(i=1,l=0; i < last; i++) {
+        if(path[i] != P_KEY) continue;
+        if(i+1 > last) break;
+        if(l && l < buflen-2) 
+                buf[l++]='.';
+        if(is_str(path[i+1])) {
+            int sl = strlen(path[i+1]);
+            if(sl < buflen - l - 1) {
+                    strcpy(&buf[l],path[i+1]);
+                    l += sl;
+            }
+            i++;
+        }
     }
     buf[l] = '\0';
 }
@@ -52,34 +52,34 @@ int yaml_config_pairs(char *cfg_file,char *keybuf,size_t keysize, yaml_config_pa
     yaml_parser_set_input_file(&parser, file);
 
     do {
-		if(ipath >= MAX_PATH_LEN) {
-			token.type = YAML_NO_TOKEN;
-			break;
-		}
+        if(ipath >= MAX_PATH_LEN) {
+            token.type = YAML_NO_TOKEN;
+            break;
+        }
         yaml_parser_scan(&parser, &token);
         switch(token.type)
         {
         case YAML_STREAM_START_TOKEN:    if(_yaml_trace_parser) puts("STREAM START");
-										 break;
+                                         break;
         case YAML_STREAM_END_TOKEN:      if(_yaml_trace_parser) puts("STREAM END");
-										 break;
+                                         break;
         case YAML_DOCUMENT_START_TOKEN:  if(_yaml_trace_parser) puts("DOC START");
-										 break;
+                                         break;
         case YAML_DOCUMENT_END_TOKEN:    if(_yaml_trace_parser) puts("DOC END");
-										 break;
+                                         break;
         case YAML_BLOCK_SEQUENCE_START_TOKEN: if(_yaml_trace_parser) puts("\t<b>Start Block (Sequence)</b>");
-										 break;
+                                         break;
 
         case YAML_KEY_TOKEN:     if(_yaml_trace_parser)printf("\t(Key token)   "); 
                                  path[++ipath] = P_KEY;
-								 break;
+                                 break;
         case YAML_VALUE_TOKEN:   if(_yaml_trace_parser)printf("\t(Value token) ");
                                  path[++ipath] = P_VAL;
-								 break;
+                                 break;
         case YAML_BLOCK_ENTRY_TOKEN:
                                  if(_yaml_trace_parser) puts("\t<b>Start Block (Entry)</b>");    
                                  path[++ipath] = P_SEQ;
-								 break;
+                                 break;
         case YAML_BLOCK_END_TOKEN:
                                  if(_yaml_trace_parser)  puts("\t<b>End block</b>");
                                  if(path[ipath] == P_LVL) ipath--;
@@ -90,7 +90,7 @@ int yaml_config_pairs(char *cfg_file,char *keybuf,size_t keysize, yaml_config_pa
         case YAML_BLOCK_MAPPING_START_TOKEN:
                                  if(_yaml_trace_parser) puts("\n\t[Block mapping]");
                                  path[++ipath] = P_LVL;
-								 break;
+                                 break;
         case YAML_SCALAR_TOKEN:
                                 if(_yaml_trace_parser)printf("\tscalar %s \n", token.data.scalar.value);
                                 path[++ipath] = strdup((char *)token.data.scalar.value);
