@@ -188,6 +188,7 @@ float v;
         if(!fc) break;
         rr->stage++;
         fstr = fc->data;
+        str = NULL;
         for(line=1; fstr && line <= rr->line; fstr = fstr->next ) {
             strncpy(line_buf,fstr->str,sizeof(line_buf)-1);
             str = line_buf;
@@ -199,7 +200,10 @@ float v;
                         0,0,mvector,32);
                 if(pcreExecRet >= 0) {
                     line++;
-                }
+                } else {
+                    line_buf[0] = '\0';
+                    str = NULL;
+				}
             } else {
                 line++;
             }
