@@ -506,7 +506,7 @@ do {
   if(!rc->numbers) break;
 
   if(!rc->fmt[0]) strncpy(rc->fmt,std->fmt,sizeof(rc->fmt));
-  if(!rc->fmt[0]) strncpy(rc->fmt,"%g",sizeof(rc->fmt));
+  if(!rc->fmt[0]) strncpy(rc->fmt,DEFAULT_FMT,sizeof(rc->fmt));
 
   if(!rc->delta) rc->delta = std->delta;
   return;
