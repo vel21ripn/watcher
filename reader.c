@@ -44,7 +44,7 @@ pthread_mutex_t fc_mutex;
 
 struct file_cache {
     char        name[256];
-    time_t      rt;
+    struct timeval tv;
     int         lines;
     struct file_str *data;
 } file_cache[READER_CFG_MAX];
@@ -63,13 +63,33 @@ struct reader_config {
 static struct reader_config default_rc = { .name="default" },
                 RC[READER_CFG_MAX];
 
+int64_t delta_tv(struct timeval *tv1,struct timeval *tv0) {
+int64_t t1 = tv1->tv_sec*1000 + tv1->tv_usec/1000;
+int64_t t0 = tv0->tv_sec*1000 + tv0->tv_usec/1000;
+t1 -= t0;
+if(!t1) t1 = 1;
+return t1;
+}
+
+static u_int64_t tv_start = 0;
+char *getctm(char *buf) {
+struct timeval tv0;
+u_int64_t tv = 0;
+gettimeofday(&tv0,NULL);
+tv = tv0.tv_sec * 1000 + tv0.tv_usec/1000;
+
+if(!tv_start) tv_start = tv;
+tv -= tv-tv_start;
+snprintf(buf,BUF_TIME_SIZE - 1,"%d.%03d",(int)tv / 1000,(int)tv % 1000);
+return buf;
+}
 
 void reader_update_result(struct reader_helper *rr) {
     char ofmt[128],num_buf[16],*o,*s,*oe,*tn,*tf;
     float avg = rr->value_last;
 
     if(rr->values_count > 1) 
-        avg = rr->value_sum / rr->values_count;
+        avg = rr->value_sum / rr->values_count ;
     o = rr->result;
     oe = o + sizeof(rr->result)-2;
     strncpy(ofmt,rr->fmt,sizeof(ofmt)-1);
@@ -119,25 +139,24 @@ struct file_str *c,*n;
     rc->lines = 0;
 }
 
-struct file_cache *reader_fetch_data(char *file,int p_int) {
+struct file_cache *reader_fetch_data(struct reader_helper *rr) {
 int i,l;
 FILE *fd = NULL;
 char line_buf[512],*str,*f_buf = NULL;
 struct file_str *c,*n;
-time_t tm = time(NULL);
 
     for(i=0; i < READER_CFG_MAX && file_cache[i].name[0]; i++) {
-        if(!strcmp(file_cache[i].name,file)) {
-            if(file_cache[i].rt > tm-p_int) return &file_cache[i];
+        if(!strcmp(file_cache[i].name,rr->file)) {
+            if(delta_tv(&rr->ctime,&file_cache[i].tv) < rr->p_int*1000-500) return &file_cache[i];
             break;
         }
     }
     if(i >= READER_CFG_MAX) return NULL;
-    strncpy(file_cache[i].name,file,sizeof(file_cache[i].name)-1);
+    strncpy(file_cache[i].name,rr->file,sizeof(file_cache[i].name)-1);
     free_reader_cache(&file_cache[i]);
 
     f_buf = malloc(FILE_VBUF_SIZE);
-    fd = fopen(file,"r");
+    fd = fopen(rr->file,"r");
     if(!fd) {
             if(f_buf) free(f_buf);
             return NULL;
@@ -164,7 +183,7 @@ time_t tm = time(NULL);
     }
     fclose(fd);
     if(f_buf) free(f_buf);
-    file_cache[i].rt = time(NULL);
+    gettimeofday(&file_cache[i].tv,NULL);
     return c ? &file_cache[i]:NULL;
 }
 
@@ -175,7 +194,7 @@ char tm_buf[BUF_TIME_SIZE];
 struct file_cache *fc;
 struct file_str *fstr;
 int line,word,next,i;
-float v;
+double v;
 
     rr->stage = 1;
     do {
@@ -183,7 +202,7 @@ float v;
 
         rr->stage++;
         pthread_mutex_lock(&fc_mutex);
-        fc = reader_fetch_data(rr->file,rr->p_int);
+        fc = reader_fetch_data(rr);
         pthread_mutex_unlock(&fc_mutex);
         if(!fc) break;
         rr->stage++;
@@ -203,7 +222,7 @@ float v;
                 } else {
                     line_buf[0] = '\0';
                     str = NULL;
-				}
+                }
             } else {
                 line++;
             }
@@ -238,9 +257,9 @@ float v;
 
         rr->stage = 0;
         if(rr->delta) {
-            float t = rr->values_count ? v - rr->value_delta : 0;
+            double t = rr->values_count ? v - rr->value_delta : 0;
             rr->value_delta = v;
-            v = t/rr->p_int;
+            v = t/(delta_tv(&rr->ctime,&rr->ptime)/1000.0);
         }
 //      fprintf(stderr,"value %s %g OK\n",rr->name,v);
         rr->value_last = v;
@@ -289,34 +308,21 @@ float v;
 
 int reader_get_data(struct reader_helper *rr,FILE *flog) {
 
+    gettimeofday(&rr->ctime,NULL);
+
     int r = _reader_get_data(rr, flog);
+    rr->ptime = rr->ctime;
     if(!rr->is_alias && rr->aliases) {
         struct reader_helper *rra;
         for(rra = rr->aliases; rra; rra = rra->aliases) {
+            rra->ctime = rr->ctime;
             if(_reader_get_data(rra,flog)) r |= 1;
+            rra->ptime = rra->ctime;
         }
     }
     return r;
 }
 
-long int delta_tv(struct timeval *tv1,struct timeval *tv0) {
-int64_t t1 = tv1->tv_sec*1000 + tv1->tv_usec/1000;
-int64_t t0 = tv0->tv_sec*1000 + tv0->tv_usec/1000;
-return (long int)(t0 - t1);
-}
-
-static u_int64_t tv_start = 0;
-char *getctm(char *buf) {
-struct timeval tv0;
-u_int64_t tv = 0;
-gettimeofday(&tv0,NULL);
-tv = tv0.tv_sec * 1000 + tv0.tv_usec/1000;
-
-if(!tv_start) tv_start = tv;
-tv -= tv-tv_start;
-snprintf(buf,BUF_TIME_SIZE - 1,"%d.%03d",(int)tv / 1000,(int)tv % 1000);
-return buf;
-}
 
 void my_sig_h(int s) {
 // nothing
@@ -444,6 +450,7 @@ const char *re_err;
     rr->p_int = rc->p_int;
     rr->delta = rc->delta != 0;
     rr->numbers = rc->numbers;
+    gettimeofday(&rr->ptime,NULL);
     for(i = 0; i < READER_CFG_MAX; i++) rr->values[i] = 0.0;
     rr->value_last = rr->value_min = rr->value_max = 0.0;
     strcpy(rr->result,"none\n");

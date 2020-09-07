@@ -6,10 +6,11 @@ struct reader_helper {
 	pthread_t	th_cmd_helper;
 	pid_t		tid;
 	timer_t		timer_id;
+	struct timeval	ptime,ctime;
 	volatile int	work;
 	int		line,word,p_int,delta,numbers,is_alias;
 	int		values_count,value_index,stage;
-	float		values[READER_MAX_NUMBERS],value_delta,
+	double		values[READER_MAX_NUMBERS],value_delta,
 			value_last,value_min,value_max,value_sum;
 	pcre		*re,*s_re;
 	struct reader_helper *aliases;
